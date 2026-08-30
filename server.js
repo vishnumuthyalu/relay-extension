@@ -20,11 +20,20 @@ if (missing.length) {
 const db = openDb();
 const app = express();
 
+const helmet = require('helmet');
+app.use(helmet());
+
+const rateLimit = require('express-rate-limit');
+const configLimiter = rateLimit({ windowMs: 60_000, limit: 20 });
+
 app.use(
   express.json({
     verify: (req, _res, buf) => { req.rawBody = buf; },
   })
 );
+
+const pinoHttp = require('pino-http');
+app.use(pinoHttp());
 
 app.use(
   OpenApiValidator.middleware({
@@ -86,12 +95,12 @@ app.post('/webhook/github', async (req, res, next) => {
   }
 });
 
-app.post('/config', requireConfigKey(process.env.CONFIG_API_KEY), (req, res) => {
+app.post('/config', configLimiter, requireConfigKey(process.env.CONFIG_API_KEY), (req, res) => {
   const saved = upsertClient(db, req.body);
   res.json({ repo: saved.repo, clientEmail: saved.client_email, clientName: saved.client_name });
 });
 
-app.post('/test', requireConfigKey(process.env.CONFIG_API_KEY), async (req, res, next) => {
+app.post('/test', configLimiter, requireConfigKey(process.env.CONFIG_API_KEY), async (req, res, next) => {
   try {
     const client = getClient(db, req.body.repo);
     if (!client) return res.status(404).json({ error: 'no client mapped to that repo' });
