@@ -116,7 +116,7 @@ app.post('/test', requireConfigKey(process.env.CONFIG_API_KEY), async (req, res,
 });
 
 // OpenAPI validator errors + everything else land here
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   console.error(err);
   res.status(err.status || 500).json({ error: err.message || 'internal error' });
 });

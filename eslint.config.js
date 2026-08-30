@@ -1,4 +1,5 @@
 const js = require('@eslint/js');
+const globals = require('globals');
 
 module.exports = [
   js.configs.recommended,
@@ -6,11 +7,17 @@ module.exports = [
     languageOptions: {
       sourceType: 'commonjs',
       ecmaVersion: 2022,
-      globals: {
-        require: 'readonly', module: 'writable', process: 'readonly',
-        console: 'readonly', __dirname: 'readonly', fetch: 'readonly',
-      },
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
-  { ignores: ['node_modules/**', 'coverage/**', 'data/**'] },
+  {
+    files: ['tests/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.jest },
+    },
+  },
+  { ignores: ['node_modules/**', 'coverage/**', 'data/**', 'diag.js'] },
 ];
