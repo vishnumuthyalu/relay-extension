@@ -147,4 +147,3 @@ node_modules/
 data/*.sqlite
 data/*.sqlite-journal
 coverage/
-.env.example
