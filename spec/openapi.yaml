@@ -1,0 +1,191 @@
+openapi: 3.1.0
+info:
+  title: Relay API
+  version: 0.1.0
+  description: >
+    Receives GitHub push webhooks, summarizes them with Claude, and
+    emails a digest to the mapped client. This contract is enforced
+    at runtime by express-openapi-validator — see lib in Part 4.
+  contact:
+    name: Relay maintainer
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://your-deployed-host.example.com
+    description: Production (replace once deployed in Part 8)
+tags:
+  - name: webhooks
+    description: Inbound GitHub delivery
+  - name: config
+    description: Client-to-repo mapping
+  - name: ops
+    description: Health & operational endpoints
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [ops]
+      summary: Liveness probe
+      description: Returns 200 if the process is up. No auth, no dependencies checked.
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /webhook/github:
+    post:
+      operationId: receiveGithubWebhook
+      tags: [webhooks]
+      summary: Receive a GitHub push event
+      description: >
+        Verifies the X-Hub-Signature-256 HMAC, deduplicates by
+        X-GitHub-Delivery, summarizes new commits with Claude, and
+        emails the mapped client. See spec/webhook-contract.md for
+        the full signing and idempotency rules.
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[0-9a-f]{64}$' }
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema: { type: string }
+        - name: X-GitHub-Delivery
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushEvent' }
+      responses:
+        '200':
+          description: Accepted (processed, deduplicated, or filtered)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [processed, duplicate, filtered] }
+        '401':
+          description: Signature missing or invalid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '5XX':
+          description: Downstream failure (Claude or Resend) after retries were exhausted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /config:
+    post:
+      operationId: upsertClientConfig
+      tags: [config]
+      summary: Map a repository to a client and notification email
+      description: >
+        Upserts the client this repo notifies on push. Called by the
+        VS Code extension's "Map This Repo to a Client" command, or
+        directly with curl.
+      security: [{ configKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ClientConfig' }
+      responses:
+        '200':
+          description: Mapping saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ClientConfig' }
+        '401':
+          description: Missing or invalid X-Config-Key
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /test:
+    post:
+      operationId: sendTestDigest
+      tags: [config]
+      summary: Send a sample digest email for a configured repo
+      description: >
+        Sends a placeholder digest to the repo's mapped client without
+        waiting for a real push — useful for confirming Resend delivery
+        works before wiring up the GitHub webhook itself.
+      security: [{ configKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repo]
+              properties:
+                repo: { type: string, description: "owner/repo" }
+      responses:
+        '200':
+          description: Test email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sent]
+                properties: { sent: { type: boolean } }
+        '404':
+          description: No client mapped to that repo
+
+components:
+  securitySchemes:
+    configKey:
+      type: apiKey
+      in: header
+      name: X-Config-Key
+  schemas:
+    PushEvent:
+      type: object
+      required: [ref, repository, pusher, commits]
+      properties:
+        ref: { type: string }
+        repository:
+          type: object
+          required: [full_name]
+          properties: { full_name: { type: string } }
+        pusher:
+          type: object
+          required: [name]
+          properties: { name: { type: string } }
+        commits:
+          type: array
+          items:
+            type: object
+            required: [id, message, url]
+            properties:
+              id: { type: string }
+              message: { type: string }
+              url: { type: string, format: uri }
+              author:
+                type: object
+                properties: { name: { type: string } }
+    ClientConfig:
+      type: object
+      required: [repo, clientEmail, clientName]
+      properties:
+        repo: { type: string, description: "owner/repo" }
+        clientEmail: { type: string, format: email }
+        clientName: { type: string }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: string } }
