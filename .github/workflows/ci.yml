@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      - run: npm ci
+      - name: Lint OpenAPI contract
+        run: npx @stoplight/spectral-cli lint spec/openapi.yaml --ruleset .spectral.yaml
+      - name: Validate JSON Schema contract
+        run: node -e "const Ajv2020=require('ajv/dist/2020');new Ajv2020({strict:true}).compile(require('./spec/summary.schema.json'))"
+      - name: Lint code
+        run: npm run lint
+      - name: Test
+        run: npm test
+        env:
+          GITHUB_WEBHOOK_SECRET: ci-secret
+          ANTHROPIC_API_KEY: ci-key
+          RESEND_API_KEY: ci-key
+          FROM_EMAIL: ci@example.com
+          CONFIG_API_KEY: ci-key
