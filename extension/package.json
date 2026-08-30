@@ -1,0 +1,50 @@
+{
+  "name": "relay-setup",
+  "displayName": "Relay Setup",
+  "description": "Configure the Relay webhook and client mapping without leaving VS Code.",
+  "version": "0.1.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "relay.registerWebhook",
+        "title": "Relay: Register GitHub Webhook"
+      },
+      {
+        "command": "relay.setClientMapping",
+        "title": "Relay: Map This Repo to a Client"
+      },
+      {
+        "command": "relay.sendTestEmail",
+        "title": "Relay: Send Test Digest"
+      }
+    ],
+    "configuration": {
+      "title": "Relay",
+      "properties": {
+        "relay.backendUrl": {
+          "type": "string",
+          "description": "Base URL of your deployed Relay backend, e.g. https://relay.example.com"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@types/vscode": "^1.134.0",
+    "typescript": "^7.0.2"
+  }
+}

@@ -149,3 +149,8 @@ data/*.sqlite-journal
 coverage/
 
 test-deployment.ps1
+
+# VS Code extension build output (extension/node_modules is already
+# covered by the unqualified node_modules/ rule above)
+extension/out/
+*.vsix
