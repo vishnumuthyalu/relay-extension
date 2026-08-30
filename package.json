@@ -25,8 +25,8 @@
     "pino-http": "^11.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
-    "eslint": "^9.39.5",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
     "globals": "^17.11.0",
     "jest": "^30.5.0",
     "js-yaml": "^5.4.1",
