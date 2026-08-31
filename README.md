@@ -2,6 +2,9 @@
 
 > **Automated client progress updates from GitHub pushes**
 
+[![CI](https://github.com/vishnumuthyalu/relay-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/relay-extension/actions/workflows/ci.yml)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org)
+
 Relay is a GitHub webhook-powered system that automatically generates non-technical email summaries of code changes and sends them to clients. Every time you push code, Claude AI summarizes the commits and Relay emails a digestible update to your configured client.
 
 ## 🎯 Overview
