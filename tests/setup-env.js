@@ -1,8 +1,5 @@
-// Runs before every test file (see jest.config.js). Gives server.js the
-// env it requires and keeps tests off the real data/relay.sqlite file.
-process.env.GITHUB_WEBHOOK_SECRET ||= 'test-webhook-secret';
-process.env.ANTHROPIC_API_KEY ||= 'test-anthropic-key';
-process.env.RESEND_API_KEY ||= 'test-resend-key';
-process.env.FROM_EMAIL ||= 'relay@example.com';
-process.env.CONFIG_API_KEY ||= 'test-config-key';
-process.env.DB_PATH = ':memory:';
+// Runs before every test file (see jest.config.js).
+process.env.NODE_ENV = 'test';
+// Postgres for tests. docker-compose.yml starts one on this URL; CI uses a
+// service container. Each test file gets its own schema (tests/helpers/db.js).
+process.env.TEST_DATABASE_URL ||= 'postgres://relay:relay@localhost:5432/relay_test';
