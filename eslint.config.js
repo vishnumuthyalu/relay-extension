@@ -19,5 +19,5 @@ module.exports = [
       globals: { ...globals.node, ...globals.jest },
     },
   },
-  { ignores: ['node_modules/**', 'coverage/**', 'data/**', 'diag.js'] },
+  { ignores: ['node_modules/**', 'coverage/**', 'data/**', 'extension/**'] },
 ];
