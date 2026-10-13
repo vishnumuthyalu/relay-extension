@@ -1,4 +1,4 @@
-const { summarizeWithClaude } = require('../lib/claude');
+const { summarizeWithClaude, buildPrompt, SummaryError, DEFAULT_MODEL } = require('../lib/claude');
 
 function fakeFetch(status, body) {
   return jest.fn().mockResolvedValue({
@@ -10,31 +10,53 @@ function fakeFetch(status, body) {
 }
 
 const args = { repo: 'acme/site', pusher: 'octocat', commits: [{ message: 'Fix bug', author: { name: 'octocat' } }], apiKey: 'k' };
+const good = { headline: 'Bug fix shipped', summary: 'Fixed a pagination bug.'.padEnd(25, '.'), highlights: ['Fixed pagination'], risk_notes: null };
 
 describe('summarizeWithClaude', () => {
-  test('parses a clean JSON response', async () => {
-    const payload = { headline: 'Bug fix shipped', summary: 'Fixed a pagination bug.'.padEnd(25, '.'), highlights: ['Fixed pagination'], risk_notes: null };
-    const fetchImpl = fakeFetch(200, { content: [{ text: JSON.stringify(payload) }] });
-    const result = await summarizeWithClaude({ ...args, fetchImpl });
-    expect(result).toEqual(payload);
+  test('parses a structured-output response', async () => {
+    const fetchImpl = fakeFetch(200, { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(good) }] });
+    await expect(summarizeWithClaude({ ...args, fetchImpl })).resolves.toEqual(good);
   });
 
-  test('strips a markdown code fence around the JSON', async () => {
-    const payload = { headline: 'Bug fix shipped', summary: 'Fixed a pagination bug.'.padEnd(25, '.'), highlights: ['Fixed pagination'] };
-    const fenced = '```json\n' + JSON.stringify(payload) + '\n```';
-    const fetchImpl = fakeFetch(200, { content: [{ text: fenced }] });
-    const result = await summarizeWithClaude({ ...args, fetchImpl });
-    expect(result.headline).toBe(payload.headline);
+  test('requests structured output, a system prompt and the default model', async () => {
+    const fetchImpl = fakeFetch(200, { content: [{ type: 'text', text: JSON.stringify(good) }] });
+    await summarizeWithClaude({ ...args, fetchImpl });
+    const body = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(body.output_config.format.type).toBe('json_schema');
+    expect(body.output_config.format.schema.required).toContain('headline');
+    expect(body.system).toMatch(/untrusted/);
+    expect(body.model).toBe(process.env.ANTHROPIC_MODEL || DEFAULT_MODEL);
   });
 
-  test('throws when the response fails the schema (extra field)', async () => {
-    const payload = { headline: 'x'.padEnd(10, 'x'), summary: 'y'.padEnd(25, 'y'), highlights: ['z'], confidence: 0.9 };
-    const fetchImpl = fakeFetch(200, { content: [{ text: JSON.stringify(payload) }] });
+  test('throws SummaryError on unparseable text', async () => {
+    const fetchImpl = fakeFetch(200, { content: [{ type: 'text', text: 'not json' }] });
+    await expect(summarizeWithClaude({ ...args, fetchImpl })).rejects.toBeInstanceOf(SummaryError);
+  });
+
+  test('throws SummaryError when the reply was cut off', async () => {
+    const fetchImpl = fakeFetch(200, { stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"headline":' }] });
+    await expect(summarizeWithClaude({ ...args, fetchImpl })).rejects.toThrow(/max_tokens/);
+  });
+
+  test('throws when the response fails the length limits', async () => {
+    const tooLong = { ...good, headline: 'x'.repeat(200) };
+    const fetchImpl = fakeFetch(200, { content: [{ type: 'text', text: JSON.stringify(tooLong) }] });
     await expect(summarizeWithClaude({ ...args, fetchImpl })).rejects.toThrow(/schema validation/);
   });
 
   test('throws on a non-OK response', async () => {
-    const fetchImpl = fakeFetch(500, 'internal error');
+    const fetchImpl = fakeFetch(400, 'bad request');
     await expect(summarizeWithClaude({ ...args, fetchImpl })).rejects.toThrow(/Claude request failed/);
+  });
+});
+
+describe('buildPrompt', () => {
+  test('caps the commit list and reports the remainder', () => {
+    const commits = Array.from({ length: 60 }, (_, i) => ({ message: `Commit ${i}\nbody`, author: { name: 'a' } }));
+    const prompt = buildPrompt({ repo: 'acme/site', pusher: 'octocat', commits });
+    expect(prompt).toContain('Commit 49');
+    expect(prompt).not.toContain('Commit 50');
+    expect(prompt).toContain('and 10 more commits');
+    expect(prompt).not.toContain('body');
   });
 });
