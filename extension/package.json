@@ -3,7 +3,7 @@
   "displayName": "Relay Setup",
   "description": "Configure the Relay webhook and client mapping without leaving VS Code.",
   "version": "0.1.0",
-  "publisher": "your-name",
+  "publisher": "vishnumuthyalu",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -25,6 +25,10 @@
       {
         "command": "relay.sendTestEmail",
         "title": "Relay: Send Test Digest"
+      },
+      {
+        "command": "relay.resetSecrets",
+        "title": "Relay: Reset Stored Secrets"
       }
     ],
     "configuration": {
@@ -46,5 +50,11 @@
     "@types/node": "^26.4.0",
     "@types/vscode": "^1.134.0",
     "typescript": "^7.0.2"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vishnumuthyalu/relay-extension.git",
+    "directory": "extension"
+  },
+  "license": "MIT"
 }
