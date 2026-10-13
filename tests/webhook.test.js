@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const request = require('supertest');
 const { createApp } = require('../server');
-const { openDb, upsertClient } = require('../lib/db');
+const { openDb, upsertClient, listDigests } = require('../lib/db');
 
 const SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 
@@ -34,7 +34,14 @@ describe('POST /webhook/github', () => {
     process.env.ONLY_BRANCH = 'main';
     db = openDb(':memory:');
     upsertClient(db, { repo: 'acme/site', clientName: 'Acme', clientEmail: 'client@acme.test' });
-    pipeline = { processPush: jest.fn().mockResolvedValue({}) };
+    pipeline = {
+      processPush: jest.fn().mockResolvedValue({
+        summary: { headline: 'Shipped', summary: 'x'.repeat(30), highlights: ['A'], risk_notes: null },
+        recipient: 'client@acme.test',
+        commitCount: 1,
+        model: 'claude-haiku-4-5',
+      }),
+    };
     app = createApp({ db, pipeline });
   });
 
@@ -52,6 +59,7 @@ describe('POST /webhook/github', () => {
     expect(res.body).toEqual({ status: 'accepted' });
     await settle();
     expect(pipeline.processPush).toHaveBeenCalledTimes(1);
+    expect(listDigests(db)).toHaveLength(1);
   });
 
   test.each([

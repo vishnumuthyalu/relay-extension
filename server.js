@@ -8,10 +8,9 @@ const OpenApiValidator = require('express-openapi-validator');
 
 const { requireGithubSignature, requireConfigKey } = require('./lib/security');
 const {
-  openDb, upsertClient, getClient, claimDelivery, completeDelivery, releaseDelivery,
-} = require('./lib/db');
+  openDb, upsertClient, getClient, claimDelivery, completeDelivery, releaseDelivery, recordDigest,} = require('./lib/db');
 const { createPipeline } = require('./lib/pipeline');
-const { renderEmailHtml, sendEmail } = require('./lib/email');
+
 
 // Fail fast: a missing secret in production should crash on boot, not
 // on the first webhook delivery.
@@ -93,7 +92,10 @@ function createApp({ db = openDb(), pipeline = createPipeline() } = {}) {
     res.status(202).json({ status: 'accepted' });
 
     const job = pipeline.processPush({ payload, client })
-      .then(() => completeDelivery(db, deliveryId))
+      .then((result) => {
+        recordDigest(db, { deliveryId, repo, ...result });
+        completeDelivery(db, deliveryId);
+      })
       .catch((err) => {
         req.log.error({ err, deliveryId }, 'delivery processing failed');
         releaseDelivery(db, deliveryId);
@@ -111,20 +113,9 @@ function createApp({ db = openDb(), pipeline = createPipeline() } = {}) {
     try {
       const client = getClient(db, req.body.repo);
       if (!client) return res.status(404).json({ error: 'no client mapped to that repo' });
+      
+      await pipeline.sendTestDigest({ repo: req.body.repo, client });
 
-      const summary = {
-        headline: `Test digest for ${req.body.repo}`,
-        summary: 'This is a sample update email generated on demand.',
-        highlights: ['This is a sample highlight.'],
-        risk_notes: null,
-      };
-      await sendEmail({
-        to: client.client_email,
-        subject: summary.headline,
-        html: renderEmailHtml({ clientName: client.client_name, repo: req.body.repo, pusher: 'test', summary }),
-        apiKey: process.env.RESEND_API_KEY,
-        fromEmail: process.env.FROM_EMAIL,
-      });
       res.json({ sent: true });
     } catch (err) {
       next(err);
