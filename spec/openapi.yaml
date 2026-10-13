@@ -69,21 +69,31 @@ paths:
             schema: { $ref: '#/components/schemas/PushEvent' }
       responses:
         '200':
-          description: Accepted (processed, deduplicated, or filtered)
+          description: >
+            Nothing to do: a repeat delivery (duplicate) or a push Relay
+            ignores (filtered: non-push event, tag, other branch, deleted
+            branch, no commits, or no client mapped).
           content:
             application/json:
               schema:
                 type: object
                 required: [status]
                 properties:
-                  status: { type: string, enum: [processed, duplicate, filtered] }
-        '401':
-          description: Signature missing or invalid
+                  status: { type: string, enum: [duplicate, filtered] }
+        '202':
+          description: >
+            Delivery claimed; the summary and email run in the background.
+            A background failure releases the claim so a GitHub redelivery
+            can retry it.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '5XX':
-          description: Downstream failure (Claude or Resend) after retries were exhausted
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: accepted }
+        '401':
+          description: Signature missing or invalid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -161,6 +171,9 @@ components:
       required: [ref, repository, pusher, commits]
       properties:
         ref: { type: string }
+        deleted:
+          type: boolean
+          description: True when the push deleted the branch; Relay ignores these.
         repository:
           type: object
           required: [full_name]
