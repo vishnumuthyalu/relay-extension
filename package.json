@@ -1,8 +1,17 @@
 {
   "name": "relay-extension",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "GitHub webhook service that turns code pushes into plain-English client update emails with Claude",
+  "author": "Vishnu Muthyalu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vishnumuthyalu/relay-extension.git"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node --experimental-sqlite server.js",
     "dev": "node --experimental-sqlite --watch server.js",
@@ -10,8 +19,6 @@
     "lint": "eslint ."
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
