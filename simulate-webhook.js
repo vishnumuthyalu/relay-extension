@@ -5,7 +5,7 @@
 // without needing a real GitHub push.
 //
 // Usage:
-//   1. Edit the CONFIG block below (repo, your own email, base URL).
+//   1. Set SIM_CLIENT_EMAIL (and optionally SIM_REPO, SIM_BASE_URL) in .env.
 //   2. node simulate-webhook.js
 //
 // Reads GITHUB_WEBHOOK_SECRET and CONFIG_API_KEY from .env in this
@@ -14,20 +14,21 @@
 require('dotenv/config');
 const crypto = require('crypto');
 
-// ---- CONFIG: edit these ----
-const BASE_URL = 'http://localhost:3000';
-const REPO = 'acme/test-repo';           // any owner/repo string, doesn't need to be real
-const CLIENT_EMAIL = 'vm17college@gmail.com';  // Resend's sandbox sender (onboarding@resend.dev) can only
-                                                // deliver to the email address on the Resend account itself —
-                                                // switch this back to any recipient once a real domain is verified.
-const CLIENT_NAME = 'Test Client';
+// ---- CONFIG: set these in .env ----
+const BASE_URL = process.env.SIM_BASE_URL || 'http://localhost:3000';
+const REPO = process.env.SIM_REPO || 'acme/test-repo'; // any owner/repo string, doesn't need to be real
+// Resend's sandbox sender (onboarding@resend.dev) can only deliver to the
+// address on your Resend account, so put that address here until you
+// verify a sending domain.
+const CLIENT_EMAIL = process.env.SIM_CLIENT_EMAIL;
+const CLIENT_NAME = process.env.SIM_CLIENT_NAME || 'Test Client';
 // -----------------------------
 
 const CONFIG_API_KEY = process.env.CONFIG_API_KEY;
 const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 
-if (!CONFIG_API_KEY || !GITHUB_WEBHOOK_SECRET) {
-  console.error('Missing CONFIG_API_KEY or GITHUB_WEBHOOK_SECRET — is .env present and loaded?');
+if (!CONFIG_API_KEY || !GITHUB_WEBHOOK_SECRET || !CLIENT_EMAIL) {
+  console.error('Missing CONFIG_API_KEY, GITHUB_WEBHOOK_SECRET or SIM_CLIENT_EMAIL — is .env present and loaded?');
   process.exit(1);
 }
 
@@ -90,7 +91,7 @@ async function sendFakePush() {
   try {
     await upsertClientConfig();
     await sendFakePush();
-    console.log('\nIf status was "processed", check the inbox for', CLIENT_EMAIL);
+    console.log('\nIf status was "accepted", check the inbox for', CLIENT_EMAIL, 'in a few seconds.');
   } catch (err) {
     console.error('\nFAILED:', err.message);
     process.exit(1);

@@ -20,11 +20,29 @@ Three headers are load-bearing:
    exact bytes GitHub signed.
 
 ## Idempotency
-GitHub retries deliveries that time out or 5xx. `X-GitHub-Delivery` is
-the same UUID on every retry of the same event, so it is the natural
-idempotency key: before processing, check whether that delivery ID is
-already recorded; if so, return `200` without re-summarizing or
-re-emailing.
+GitHub redelivers events (automatically on some failures, and manually
+from the "Recent Deliveries" page). `X-GitHub-Delivery` is the same UUID
+on every redelivery of the same event, so it is the idempotency key.
+
+Each delivery ID moves through a small lifecycle in `processed_deliveries`:
+
+| Step | When | Row |
+|------|------|-----|
+| claim | right after the signature check | inserted with `status = 'processing'` |
+| complete | filtered, or summary + email succeeded | `status = 'done'` |
+| release | background processing failed | row deleted, so a redelivery can retry |
+
+The claim is a single `INSERT … ON CONFLICT` — the insert itself is the
+lock, so two concurrent copies of one delivery can't both win. A losing
+or repeated delivery gets `200 {"status":"duplicate"}`. A `processing`
+claim older than 10 minutes is treated as abandoned (the process died
+mid-delivery) and can be re-claimed.
+
+## Response timing
+Relay replies `202 {"status":"accepted"}` as soon as a delivery is claimed
+and matched to a client, then summarizes and emails in the background.
+GitHub only needs to know the delivery was accepted; waiting for Claude
+and Resend inside the request risks GitHub's delivery timeout.
 
 ## Payload (subset we depend on)
 We only read these fields from the `push` event body — everything else
@@ -47,6 +65,12 @@ in GitHub's payload is ignored and MUST NOT be depended on elsewhere:
 ```
 
 ## Filtering
-If `ONLY_BRANCH` is set, pushes whose `ref` doesn't end in
-`/<ONLY_BRANCH>` are accepted (`200`) but not summarized or emailed —
-this is a deliberate no-op, not an error.
+These are accepted with `200 {"status":"filtered"}` and never summarized
+or emailed — a deliberate no-op, not an error:
+
+- any event other than `push`
+- refs that aren't branches (`refs/tags/...`)
+- branches other than `ONLY_BRANCH`, when it is set (exact match on the
+  branch name, so `feature/main` is not `main`)
+- branch deletions (`"deleted": true`) and pushes with no commits
+- repos with no client mapped

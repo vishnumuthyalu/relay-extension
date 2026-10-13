@@ -1,0 +1,38 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "headline",
+    "summary",
+    "highlights",
+    "risk_notes"
+  ],
+  "properties": {
+    "headline": {
+      "type": "string",
+      "description": "One-line email subject, plain text, no markdown, under 90 characters."
+    },
+    "summary": {
+      "type": "string",
+      "description": "1-2 short paragraphs in plain English about what changed, under 900 characters."
+    },
+    "highlights": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "1-6 short bullet points, most client-relevant first, each under 160 characters."
+    },
+    "risk_notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Anything a non-technical client should be cautious about, under 300 characters, or null."
+    }
+  }
+}
