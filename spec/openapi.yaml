@@ -1,25 +1,31 @@
 openapi: 3.1.0
 info:
   title: Relay API
-  version: 0.1.0
+  version: 0.4.0
   description: >
-    Receives GitHub push webhooks, summarizes them with Claude, and
-    emails a digest to the mapped client. This contract is enforced
-    at runtime by express-openapi-validator — see lib in Part 4.
+    Relay is a GitHub App that turns code pushes into plain-English email
+    digests for a non-technical client. This contract is enforced at
+    runtime by express-openapi-validator for the JSON API. Webhook
+    payloads are validated against spec/push-event.schema.json inside the
+    webhook route. Sign-in (/auth/*) and the email link pages
+    (/confirm, /unsubscribe) return HTML or redirects and are not part of
+    this contract.
   contact:
     name: Relay maintainer
 servers:
   - url: http://localhost:3000
     description: Local development
-  - url: https://your-deployed-host.example.com
-    description: Production (replace once deployed in Part 8)
 tags:
   - name: webhooks
-    description: Inbound GitHub delivery
-  - name: config
-    description: Client-to-repo mapping
+    description: Inbound GitHub App deliveries
+  - name: account
+    description: The signed-in user and their installations
+  - name: mappings
+    description: Which client receives digests for which repository
+  - name: digests
+    description: Digest history and usage
   - name: ops
-    description: Health & operational endpoints
+    description: Health and operational endpoints
 
 paths:
   /health:
@@ -43,12 +49,12 @@ paths:
     post:
       operationId: receiveGithubWebhook
       tags: [webhooks]
-      summary: Receive a GitHub push event
+      summary: Receive a GitHub App delivery
       description: >
-        Verifies the X-Hub-Signature-256 HMAC, deduplicates by
-        X-GitHub-Delivery, summarizes new commits with Claude, and
-        emails the mapped client. See spec/webhook-contract.md for
-        the full signing and idempotency rules.
+        Verifies X-Hub-Signature-256, then handles `push` (claim, filter,
+        enqueue) and `installation` (created, deleted, suspend, unsuspend)
+        events. Everything else is acknowledged and ignored. See
+        spec/webhook-contract.md for signing, idempotency and filtering.
       parameters:
         - name: X-Hub-Signature-256
           in: header
@@ -61,30 +67,29 @@ paths:
         - name: X-GitHub-Delivery
           in: header
           required: true
-          schema: { type: string, format: uuid }
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PushEvent' }
+            schema:
+              description: A GitHub webhook payload. Push payloads must match push-event.schema.json.
+              type: object
       responses:
         '200':
           description: >
-            Nothing to do: a repeat delivery (duplicate) or a push Relay
-            ignores (filtered: non-push event, tag, other branch, deleted
-            branch, no commits, or no client mapped).
+            Nothing more to do: a repeat delivery (duplicate), an event or
+            push Relay ignores (filtered), or an installation event that
+            was applied (handled).
           content:
             application/json:
               schema:
                 type: object
                 required: [status]
                 properties:
-                  status: { type: string, enum: [duplicate, filtered] }
+                  status: { type: string, enum: [duplicate, filtered, handled] }
         '202':
-          description: >
-            Delivery claimed; the summary and email run in the background.
-            A background failure releases the claim so a GitHub redelivery
-            can retry it.
+          description: Push claimed and queued; the worker sends the digest.
           content:
             application/json:
               schema:
@@ -92,58 +97,128 @@ paths:
                 required: [status]
                 properties:
                   status: { type: string, const: accepted }
+        '400':
+          description: Signed, but the push payload doesn't match the schema
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '401':
           description: Signature missing or invalid
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /config:
-    post:
-      operationId: upsertClientConfig
-      tags: [config]
-      summary: Map a repository to a client and notification email
-      description: >
-        Upserts the client this repo notifies on push. Called by the
-        VS Code extension's "Map This Repo to a Client" command, or
-        directly with curl.
-      security: [{ configKey: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ClientConfig' }
+  /api/me:
+    get:
+      operationId: getMe
+      tags: [account]
+      summary: The signed-in user and the installations they can manage
+      description: Installations come from GitHub at sign-in, so a newly installed app appears after signing in again.
+      security: [{ session: [] }]
       responses:
         '200':
-          description: Mapping saved
+          description: Current user
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ClientConfig' }
-        '401':
-          description: Missing or invalid X-Config-Key
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema:
+                type: object
+                required: [login, installUrl, installations]
+                properties:
+                  login: { type: string }
+                  installUrl: { type: string, format: uri }
+                  installations:
+                    type: array
+                    items: { $ref: '#/components/schemas/Installation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
 
-  /test:
-    post:
-      operationId: sendTestDigest
-      tags: [config]
-      summary: Send a sample digest email for a configured repo
+  /api/installations/{installationId}/mappings:
+    parameters:
+      - $ref: '#/components/parameters/InstallationId'
+    get:
+      operationId: listMappings
+      tags: [mappings]
+      summary: List client mappings
+      description: Every repository in this installation that has a client, with its confirmation status.
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: All mappings for this installation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mappings]
+                properties:
+                  mappings:
+                    type: array
+                    items: { $ref: '#/components/schemas/Mapping' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/installations/{installationId}/mappings/{owner}/{repo}:
+    parameters:
+      - $ref: '#/components/parameters/InstallationId'
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/Repo'
+    put:
+      operationId: setMapping
+      tags: [mappings]
+      summary: Map a repository to a client
       description: >
-        Sends a placeholder digest to the repo's mapped client without
-        waiting for a real push — useful for confirming Resend delivery
-        works before wiring up the GitHub webhook itself.
-      security: [{ configKey: [] }]
+        Creates or updates the mapping. A new or changed email address gets
+        a confirmation email, and digests start only after the client confirms.
+      security: [{ session: [] }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [repo]
+              additionalProperties: false
+              required: [clientName, clientEmail]
               properties:
-                repo: { type: string, description: "owner/repo" }
+                clientName: { type: string, minLength: 1, maxLength: 120 }
+                clientEmail: { type: string, format: email }
+                branch:
+                  type: [string, 'null']
+                  description: Branch to watch; null follows the repository's default branch.
+      responses:
+        '200':
+          description: Mapping saved
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Mapping'
+                  - type: object
+                    required: [confirmationSent]
+                    properties:
+                      confirmationSent: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: deleteMapping
+      tags: [mappings]
+      summary: Stop sending digests for a repository
+      description: Removes the mapping. Digests already sent stay in the history.
+      security: [{ session: [] }]
+      responses:
+        '204':
+          description: Mapping removed; its digest history is kept
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/installations/{installationId}/mappings/{owner}/{repo}/test:
+    parameters:
+      - $ref: '#/components/parameters/InstallationId'
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/Repo'
+    post:
+      operationId: sendTestDigest
+      tags: [mappings]
+      summary: Email a sample digest to the repository's confirmed client
+      description: Sends a placeholder digest so you can check delivery. Refused until the client has confirmed.
+      security: [{ session: [] }]
       responses:
         '200':
           description: Test email sent
@@ -151,56 +226,146 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [sent]
-                properties: { sent: { type: boolean } }
-        '404':
-          description: No client mapped to that repo
+                required: [repo, sentTo]
+                properties:
+                  repo: { type: string }
+                  sentTo: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The client hasn't confirmed, or has unsubscribed
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
+  /api/installations/{installationId}/digests:
+    parameters:
+      - $ref: '#/components/parameters/InstallationId'
+    get:
+      operationId: listDigests
+      tags: [digests]
+      summary: Digests sent for this installation, newest first
+      description: Optionally filtered to one repository.
+      security: [{ session: [] }]
+      parameters:
+        - name: repo
+          in: query
+          schema: { type: string, pattern: '^[\w.-]+/[\w.-]+$' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        '200':
+          description: Digest history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [digests]
+                properties:
+                  digests:
+                    type: array
+                    items: { $ref: '#/components/schemas/Digest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/installations/{installationId}/usage:
+    parameters:
+      - $ref: '#/components/parameters/InstallationId'
+    get:
+      operationId: getUsage
+      tags: [digests]
+      summary: This month's digest count and token usage against the cap
+      description: Past monthlyCap, clients receive plain commit-title digests instead of Claude-written ones.
+      security: [{ session: [] }]
+      responses:
+        '200':
+          description: Usage for the current calendar month (UTC)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [month, digestsSent, fallbackSent, inputTokens, outputTokens, monthlyCap, claudeEnabled]
+                properties:
+                  month: { type: string, pattern: '^\d{4}-\d{2}$' }
+                  digestsSent: { type: integer }
+                  fallbackSent: { type: integer }
+                  inputTokens: { type: integer }
+                  outputTokens: { type: integer }
+                  monthlyCap: { type: integer }
+                  claudeEnabled: { type: boolean }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
-    configKey:
+    session:
       type: apiKey
-      in: header
-      name: X-Config-Key
+      in: cookie
+      name: relay_session
+      description: Signed session cookie set by /auth/callback after "Sign in with GitHub".
+  parameters:
+    InstallationId:
+      name: installationId
+      in: path
+      required: true
+      schema: { type: integer }
+    Owner:
+      name: owner
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[\w.-]+$' }
+    Repo:
+      name: repo
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[\w.-]+$' }
+  responses:
+    Unauthorized:
+      description: Not signed in
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found, or not an installation you can manage
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
   schemas:
-    PushEvent:
+    Installation:
       type: object
-      required: [ref, repository, pusher, commits]
+      required: [id, accountLogin, accountType, suspended]
       properties:
-        ref: { type: string }
-        deleted:
-          type: boolean
-          description: True when the push deleted the branch; Relay ignores these.
-        repository:
-          type: object
-          required: [full_name]
-          properties: { full_name: { type: string } }
-        pusher:
-          type: object
-          required: [name]
-          properties: { name: { type: string } }
-        commits:
-          type: array
-          items:
-            type: object
-            required: [id, message, url]
-            properties:
-              id: { type: string }
-              message: { type: string }
-              url: { type: string, format: uri }
-              author:
-                type: object
-                properties: { name: { type: string } }
-    ClientConfig:
+        id: { type: integer }
+        accountLogin: { type: string }
+        accountType: { type: string }
+        suspended: { type: boolean }
+    Mapping:
       type: object
-      required: [repo, clientEmail, clientName]
+      required: [repo, clientName, clientEmail, branch, status, updatedAt]
       properties:
-        repo: { type: string, description: "owner/repo" }
-        clientEmail: { type: string, format: email }
+        repo: { type: string }
         clientName: { type: string }
+        clientEmail: { type: string }
+        branch: { type: [string, 'null'] }
+        status:
+          type: string
+          enum: [pending, active, unsubscribed]
+          description: pending until the client clicks the confirmation link
+        updatedAt: { type: string, format: date-time }
+    Digest:
+      type: object
+      required: [deliveryId, repo, recipient, headline, summary, commitCount, model, kind, sentAt]
+      properties:
+        deliveryId: { type: string }
+        repo: { type: string }
+        recipient: { type: string }
+        headline: { type: string }
+        summary: { type: object }
+        commitCount: { type: integer }
+        model: { type: [string, 'null'] }
+        kind: { type: string, enum: [ai, fallback] }
+        sentAt: { type: string, format: date-time }
     Error:
       type: object
       required: [error]
