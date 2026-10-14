@@ -1,7 +1,7 @@
 {
   "name": "relay-setup",
   "displayName": "Relay Setup",
-  "description": "Configure the Relay webhook and client mapping without leaving VS Code.",
+  "description": "Install Relay on GitHub and sign in to your Relay backend from VS Code.",
   "version": "0.1.0",
   "publisher": "vishnumuthyalu",
   "engines": {
@@ -15,20 +15,12 @@
   "contributes": {
     "commands": [
       {
-        "command": "relay.registerWebhook",
-        "title": "Relay: Register GitHub Webhook"
+        "command": "relay.installApp",
+        "title": "Relay: Install GitHub App"
       },
       {
-        "command": "relay.setClientMapping",
-        "title": "Relay: Map This Repo to a Client"
-      },
-      {
-        "command": "relay.sendTestEmail",
-        "title": "Relay: Send Test Digest"
-      },
-      {
-        "command": "relay.resetSecrets",
-        "title": "Relay: Reset Stored Secrets"
+        "command": "relay.signIn",
+        "title": "Relay: Sign In"
       }
     ],
     "configuration": {
@@ -36,7 +28,7 @@
       "properties": {
         "relay.backendUrl": {
           "type": "string",
-          "description": "Base URL of your deployed Relay backend, e.g. https://relay.example.com"
+          "description": "Base URL of your Relay backend, e.g. https://relay.example.com"
         }
       }
     }
