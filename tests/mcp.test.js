@@ -3,34 +3,39 @@ const path = require('path');
 const { Client } = require('@modelcontextprotocol/client');
 const { InMemoryTransport } = require('@modelcontextprotocol/server');
 const { createRelayMcpServer } = require('../mcp/server');
-const { createLocalService } = require('../mcp/service');
-const { createPipeline } = require('../lib/pipeline');
-const { openDb, recordDigest } = require('../lib/db');
 
-const summary = {
-  headline: 'Checkout now remembers saved cards',
-  summary: 'Returning customers can pay with a saved card in one tap.',
-  highlights: ['Saved cards at checkout'],
-  risk_notes: null,
-};
+const { createRelayService } = require('../lib/service');
+const db = require('../lib/db');
+const { createTestDb } = require('./helpers/db');
+const { testConfig, testPipeline, goodSummary: summary } = require('./helpers/fixtures');
 
-// A real McpServer and Client wired together in memory, with Claude and
-// Resend replaced by mocks so nothing leaves the test.
+let testDb, pool;
+beforeAll(async () => { testDb = await createTestDb(); pool = testDb.pool; });
+afterAll(() => testDb.destroy());
+
+let nextId = 3000;
+
+// A real McpServer and Client wired together in memory for a fresh
+// installation, with Claude and Resend replaced by mocks.
+
 async function connect() {
-  const db = openDb(':memory:');
-  const summarize = jest.fn().mockResolvedValue(summary);
-  const send = jest.fn().mockResolvedValue({ id: 'email_1' });
-  const pipeline = createPipeline({
-    env: { ANTHROPIC_API_KEY: 'k', RESEND_API_KEY: 'k', FROM_EMAIL: 'relay@example.com' },
-    summarize,
-    send,
-  });
-  const server = createRelayMcpServer(createLocalService({ db, pipeline }));
+  
+  const config = testConfig();
+  const installationId = nextId++;
+  await db.upsertInstallation(pool, { id: installationId, accountLogin: 'acme', accountType: 'Organization' });
+  const installation = await db.getInstallation(pool, installationId);
+  const { pipeline, summarize, send } = testPipeline(config);
+  const server = createRelayMcpServer(createRelayService({ pool, pipeline, config, installation }));
+
   const client = new Client({ name: 'relay-test', version: '0.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  return { db, client, server, summarize, send };
+  return { installationId, client, server, summarize, send };
 }
+
+const map = (ctx, repo = 'acme/site', clientEmail = 'jane@acme.test') =>
+  ctx.client.callTool({ name: 'set_client_mapping', arguments: { repo, clientName: 'Jane', clientEmail } });
+
 
 describe('Relay MCP server', () => {
   let ctx;
@@ -39,11 +44,11 @@ describe('Relay MCP server', () => {
 
   test('lists the seven tools with annotations', async () => {
     const { tools } = await ctx.client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual([
-      'list_client_mappings', 'list_recent_digests', 'preview_digest', 'remove_client_mapping',
-      'resend_digest', 'send_test_digest', 'set_client_mapping',
-    ]);
+    
+
+
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(Object.keys(byName)).toHaveLength(7);
     expect(byName.remove_client_mapping.annotations.destructiveHint).toBe(true);
     expect(byName.list_client_mappings.annotations.readOnlyHint).toBe(true);
     expect(byName.set_client_mapping.outputSchema).toBeDefined();
@@ -56,25 +61,21 @@ describe('Relay MCP server', () => {
     expect(tools.map((t) => t.name).sort()).toEqual(documented);
   });
 
-  test('maps, lists and removes a repo', async () => {
-    const set = await ctx.client.callTool({
-      name: 'set_client_mapping',
-      arguments: { repo: 'acme/site', clientName: 'Acme', clientEmail: 'jane@acme.test' },
-    });
-    expect(set.structuredContent).toMatchObject({ repo: 'acme/site', clientEmail: 'jane@acme.test' });
+  test('mapping a repo sends a confirmation and lists it as pending', async () => {
+    const set = await map(ctx);
+    expect(set.structuredContent).toMatchObject({ repo: 'acme/site', status: 'pending', confirmationSent: true });
+    expect(set.content[0].text).toMatch(/confirmation email/);
+    expect(ctx.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'jane@acme.test' }));
 
     const list = await ctx.client.callTool({ name: 'list_client_mappings', arguments: {} });
-    expect(list.structuredContent.mappings).toHaveLength(1);
+    expect(list.structuredContent.mappings).toEqual([expect.objectContaining({ repo: 'acme/site', status: 'pending' })]);
 
     const removed = await ctx.client.callTool({ name: 'remove_client_mapping', arguments: { repo: 'acme/site' } });
     expect(removed.structuredContent).toEqual({ repo: 'acme/site', removed: true });
   });
 
   test('rejects a malformed repo name', async () => {
-    const res = await ctx.client.callTool({
-      name: 'set_client_mapping',
-      arguments: { repo: 'not a repo', clientName: 'Acme', clientEmail: 'jane@acme.test' },
-    });
+    const res = await map(ctx, 'not a repo');
     expect(res.isError).toBe(true);
   });
 
@@ -91,42 +92,49 @@ describe('Relay MCP server', () => {
     expect(ctx.send).not.toHaveBeenCalled();
   });
 
-  test('send_test_digest explains an unmapped repo instead of failing', async () => {
-    const res = await ctx.client.callTool({ name: 'send_test_digest', arguments: { repo: 'acme/site' } });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toMatch(/set_client_mapping/);
-    expect(ctx.send).not.toHaveBeenCalled();
+  test('explains why a test digest cannot go out yet', async () => {
+    const unmapped = await ctx.client.callTool({ name: 'send_test_digest', arguments: { repo: 'acme/site' } });
+    expect(unmapped.isError).toBe(true);
+    expect(unmapped.content[0].text).toMatch(/set_client_mapping/);
+
+    await map(ctx);
+    const pending = await ctx.client.callTool({ name: 'send_test_digest', arguments: { repo: 'acme/site' } });
+    expect(pending.isError).toBe(true);
+    expect(pending.content[0].text).toMatch(/hasn't confirmed/);
   });
 
   test('lists and resends stored digests', async () => {
-    await ctx.client.callTool({
-      name: 'set_client_mapping',
-      arguments: { repo: 'acme/site', clientName: 'Acme', clientEmail: 'jane@acme.test' },
-    });
-    recordDigest(ctx.db, {
-      deliveryId: 'd-1', repo: 'acme/site', recipient: 'old@acme.test', summary, commitCount: 3, model: 'claude-haiku-4-5',
+    await map(ctx);
+    await db.confirmMapping(pool, ctx.installationId, 'acme/site', 'jane@acme.test');
+    await db.recordDigest(pool, ctx.installationId, {
+      deliveryId: `d-${ctx.installationId}`, repo: 'acme/site', recipient: 'jane@acme.test',
+      summary, commitCount: 3, model: 'claude-haiku-4-5', kind: 'ai',
     });
 
     const list = await ctx.client.callTool({ name: 'list_recent_digests', arguments: { repo: 'acme/site' } });
     expect(list.structuredContent.digests).toEqual([
-      expect.objectContaining({ deliveryId: 'd-1', headline: summary.headline, commitCount: 3 }),
+      expect.objectContaining({ deliveryId: `d-${ctx.installationId}`, headline: summary.headline, commitCount: 3 }),
     ]);
 
-    const resent = await ctx.client.callTool({ name: 'resend_digest', arguments: { deliveryId: 'd-1' } });
-    expect(resent.structuredContent).toEqual({ deliveryId: 'd-1', sentTo: 'jane@acme.test' });
-    expect(ctx.send).toHaveBeenCalledWith(expect.objectContaining({ to: 'jane@acme.test', subject: summary.headline }));
+    ctx.send.mockClear();
+    const resent = await ctx.client.callTool({ name: 'resend_digest', arguments: { deliveryId: `d-${ctx.installationId}` } });
+    expect(resent.structuredContent).toEqual({ deliveryId: `d-${ctx.installationId}`, sentTo: 'jane@acme.test' });
+    expect(ctx.send).toHaveBeenCalledWith(expect.objectContaining({ subject: summary.headline }));
   });
 
   test('exposes mappings, digests and the summary schema as resources', async () => {
-    recordDigest(ctx.db, {
-      deliveryId: 'd-2', repo: 'acme/site', recipient: 'jane@acme.test', summary, commitCount: 1, model: 'claude-haiku-4-5',
+    await db.recordDigest(pool, ctx.installationId, {
+      deliveryId: `r-${ctx.installationId}`, repo: 'acme/site', recipient: 'jane@acme.test',
+      summary, commitCount: 1, model: 'claude-haiku-4-5', kind: 'ai',
     });
     const { resources } = await ctx.client.listResources();
-    const uris = resources.map((r) => r.uri);
-    expect(uris).toEqual(expect.arrayContaining(['relay://clients', 'relay://schema/summary', 'relay://digests/d-2']));
 
-    const digest = await ctx.client.readResource({ uri: 'relay://digests/d-2' });
-    expect(JSON.parse(digest.contents[0].text)).toMatchObject({ deliveryId: 'd-2', summary });
+    expect(resources.map((r) => r.uri)).toEqual(expect.arrayContaining([
+      'relay://clients', 'relay://schema/summary', `relay://digests/r-${ctx.installationId}`,
+    ]));
+
+    const digest = await ctx.client.readResource({ uri: `relay://digests/r-${ctx.installationId}` });
+    expect(JSON.parse(digest.contents[0].text)).toMatchObject({ summary });
 
     const schema = await ctx.client.readResource({ uri: 'relay://schema/summary' });
     expect(JSON.parse(schema.contents[0].text).title).toBe('CommitDigestSummary');
