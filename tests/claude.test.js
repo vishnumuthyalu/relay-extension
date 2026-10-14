@@ -13,9 +13,18 @@ const args = { repo: 'acme/site', pusher: 'octocat', commits: [{ message: 'Fix b
 const good = { headline: 'Bug fix shipped', summary: 'Fixed a pagination bug.'.padEnd(25, '.'), highlights: ['Fixed pagination'], risk_notes: null };
 
 describe('summarizeWithClaude', () => {
-  test('parses a structured-output response', async () => {
-    const fetchImpl = fakeFetch(200, { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(good) }] });
-    await expect(summarizeWithClaude({ ...args, fetchImpl })).resolves.toEqual(good);
+    test('parses a structured-output response and reports usage', async () => {
+    const fetchImpl = fakeFetch(200, {
+      model: 'claude-haiku-4-5',
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 120, output_tokens: 80 },
+      content: [{ type: 'text', text: JSON.stringify(good) }],
+    });
+    await expect(summarizeWithClaude({ ...args, fetchImpl })).resolves.toEqual({
+      summary: good,
+      model: 'claude-haiku-4-5',
+      usage: { inputTokens: 120, outputTokens: 80 },
+    });
   });
 
   test('requests structured output, a system prompt and the default model', async () => {
