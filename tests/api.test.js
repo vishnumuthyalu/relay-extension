@@ -41,7 +41,7 @@ async function signIn() {
   const state = new URL(login.headers.location).searchParams.get('state');
   const callback = await agent.get(`/auth/callback?code=abc&state=${state}`);
   expect(callback.status).toBe(302);
-  expect(callback.headers.location).toBe('/api/me');
+  expect(callback.headers.location).toBe('/dashboard');
   return agent;
 }
 
@@ -72,7 +72,7 @@ describe('sign-in', () => {
     const login = await agent.get('/auth/login?returnTo=//evil.test');
     const state = new URL(login.headers.location).searchParams.get('state');
     const callback = await agent.get(`/auth/callback?code=abc&state=${state}`);
-    expect(callback.headers.location).toBe('/api/me');
+    expect(callback.headers.location).toBe('/dashboard');
   });
 
   test('/install redirects to the GitHub App install page', async () => {

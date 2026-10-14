@@ -2,9 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client } = require('@modelcontextprotocol/client');
 const { InMemoryTransport } = require('@modelcontextprotocol/server');
-const { createRelayMcpServer } = require('../mcp/server');
-
-const { createRelayService } = require('../lib/service');
+const { createRelayMcpServer, forInstallation } = require('../mcp/server');
 const db = require('../lib/db');
 const { createTestDb } = require('./helpers/db');
 const { testConfig, testPipeline, goodSummary: summary } = require('./helpers/fixtures');
@@ -17,16 +15,13 @@ let nextId = 3000;
 
 // A real McpServer and Client wired together in memory for a fresh
 // installation, with Claude and Resend replaced by mocks.
-
 async function connect() {
-  
   const config = testConfig();
   const installationId = nextId++;
   await db.upsertInstallation(pool, { id: installationId, accountLogin: 'acme', accountType: 'Organization' });
   const installation = await db.getInstallation(pool, installationId);
   const { pipeline, summarize, send } = testPipeline(config);
-  const server = createRelayMcpServer(createRelayService({ pool, pipeline, config, installation }));
-
+  const server = createRelayMcpServer(forInstallation({ pool, pipeline, config, installation }));
   const client = new Client({ name: 'relay-test', version: '0.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -36,19 +31,15 @@ async function connect() {
 const map = (ctx, repo = 'acme/site', clientEmail = 'jane@acme.test') =>
   ctx.client.callTool({ name: 'set_client_mapping', arguments: { repo, clientName: 'Jane', clientEmail } });
 
-
 describe('Relay MCP server', () => {
   let ctx;
   beforeEach(async () => { ctx = await connect(); });
   afterEach(async () => { await ctx.client.close(); await ctx.server.close(); });
 
-  test('lists the seven tools with annotations', async () => {
+  test('lists the eight tools with annotations', async () => {
     const { tools } = await ctx.client.listTools();
-    
-
-
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-    expect(Object.keys(byName)).toHaveLength(7);
+    expect(Object.keys(byName)).toHaveLength(8);
     expect(byName.remove_client_mapping.annotations.destructiveHint).toBe(true);
     expect(byName.list_client_mappings.annotations.readOnlyHint).toBe(true);
     expect(byName.set_client_mapping.outputSchema).toBeDefined();
@@ -72,6 +63,15 @@ describe('Relay MCP server', () => {
 
     const removed = await ctx.client.callTool({ name: 'remove_client_mapping', arguments: { repo: 'acme/site' } });
     expect(removed.structuredContent).toEqual({ repo: 'acme/site', removed: true });
+  });
+
+  test('lists the one account a stdio server acts for, and rejects others', async () => {
+    const res = await ctx.client.callTool({ name: 'list_accounts', arguments: {} });
+    expect(res.structuredContent).toEqual({ accounts: [{ account: 'acme', accountType: 'Organization', suspended: false }] });
+
+    const other = await ctx.client.callTool({ name: 'list_client_mappings', arguments: { account: 'globex' } });
+    expect(other.isError).toBe(true);
+    expect(other.content[0].text).toMatch(/can't manage "globex"/);
   });
 
   test('rejects a malformed repo name', async () => {
@@ -128,12 +128,11 @@ describe('Relay MCP server', () => {
       summary, commitCount: 1, model: 'claude-haiku-4-5', kind: 'ai',
     });
     const { resources } = await ctx.client.listResources();
-
     expect(resources.map((r) => r.uri)).toEqual(expect.arrayContaining([
-      'relay://clients', 'relay://schema/summary', `relay://digests/r-${ctx.installationId}`,
+      'relay://accounts/acme/clients', 'relay://schema/summary', `relay://accounts/acme/digests/r-${ctx.installationId}`,
     ]));
 
-    const digest = await ctx.client.readResource({ uri: `relay://digests/r-${ctx.installationId}` });
+    const digest = await ctx.client.readResource({ uri: `relay://accounts/acme/digests/r-${ctx.installationId}` });
     expect(JSON.parse(digest.contents[0].text)).toMatchObject({ summary });
 
     const schema = await ctx.client.readResource({ uri: 'relay://schema/summary' });
