@@ -17,7 +17,7 @@ function createAuthRouter({ pool, github, config }) {
     // Only allow same-site paths, so the login can't be used as an open redirect.
     const returnTo = typeof req.query.returnTo === 'string' && /^\/(?!\/)/.test(req.query.returnTo)
       ? req.query.returnTo
-      : '/api/me';
+      : '/dashboard';
     req.session.returnTo = returnTo;
     res.redirect(github.authorizeUrl({ state, redirectUri }));
   });
@@ -40,7 +40,7 @@ function createAuthRouter({ pool, github, config }) {
 
       // The GitHub token is not kept: everything later is authorized
       // against installation_members.
-      const returnTo = req.session.returnTo || '/api/me';
+      const returnTo = req.session.returnTo || '/dashboard';
       req.session = { uid: user.githubUserId, login: user.login };
       res.redirect(returnTo);
     } catch (err) {
