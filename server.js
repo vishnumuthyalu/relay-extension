@@ -1,5 +1,6 @@
-// Web process: GitHub webhooks, sign-in, the JSON API and the email link
-// pages. Digests are sent by the worker process (worker.js), not here.
+// Web process: GitHub webhooks, the remote MCP endpoint and its OAuth
+// server, sign-in, the dashboard, the JSON API and the email link pages.
+// Digests are sent by the worker process (worker.js), not here.
 require('dotenv/config');
 const path = require('path');
 const express = require('express');
@@ -15,20 +16,32 @@ const { createLinks } = require('./lib/links');
 const { createPipeline } = require('./lib/pipeline');
 const { createGithubClient } = require('./lib/github');
 const { startQueue } = require('./lib/queue');
+const { deriveKey } = require('./lib/oauth/jwt');
+const { createClientRegistry } = require('./lib/oauth/clients');
+const { createTokenService } = require('./lib/oauth/tokens');
 const { createWebhookRouter } = require('./routes/webhook');
+const { createMcpRouter } = require('./routes/mcp');
+const { createOAuthRouter } = require('./routes/oauth');
 const { createAuthRouter } = require('./routes/auth');
+const { createDashboardRouter, createLogoutRoute } = require('./routes/dashboard');
 const { createApiRouter } = require('./routes/api');
 const { createLinksRouter } = require('./routes/links');
 
-function createApp({ config, pool, queue, github, pipeline, links }) {
+function createApp({ config, pool, queue, github, pipeline, links, fetchImpl = fetch }) {
   const app = express();
   app.set('trust proxy', 1); // behind the host's TLS-terminating proxy
   app.use(helmet());
   app.use(pinoHttp({ enabled: process.env.NODE_ENV !== 'test' }));
 
-  // Webhooks first: they need the raw body for the HMAC check and are
-  // validated against spec/push-event.schema.json inside the route.
+  const tokens = createTokenService({ pool, key: deriveKey(config.sessionSecret), issuer: config.publicUrl });
+  const clients = createClientRegistry({ pool, fetchImpl });
+
+  // Machine endpoints first; none of them use the session cookie.
+  // Webhooks need the raw body for the HMAC check.
   app.use(createWebhookRouter({ pool, queue, config }));
+  const mcp = createMcpRouter({ pool, pipeline, config, tokens, github });
+  app.use(mcp.router);
+  app.locals.closeMcp = mcp.close;
 
   app.use(cookieSession({
     name: 'relay_session',
@@ -39,7 +52,12 @@ function createApp({ config, pool, queue, github, pipeline, links }) {
     maxAge: 7 * 24 * 60 * 60 * 1000,
   }));
 
+  // OAuth for MCP clients (metadata, register, authorize, token), then the
+  // browser-facing pages.
+  app.use(createOAuthRouter({ config, clients, tokens }));
   app.use(createAuthRouter({ pool, github, config }));
+  app.use(createLogoutRoute());
+  app.use(createDashboardRouter({ pool, pipeline, config }));
   app.use(createLinksRouter({ pool, links }));
 
   app.use(express.json());
@@ -51,8 +69,8 @@ function createApp({ config, pool, queue, github, pipeline, links }) {
       // Sign-in is enforced by requireUser in routes/api.js; the scheme in
       // the spec documents it.
       validateSecurity: false,
-      // Routes above answer before reaching here; these are HTML or OAuth redirects.
-      ignorePaths: /^\/(auth|install|confirm|unsubscribe)(\/|$)/,
+      // Routes above answer before reaching here; these are HTML, OAuth or MCP.
+      ignorePaths: /^\/(auth|install|confirm|unsubscribe|dashboard|oauth|mcp|\.well-known)(\/|$)/,
     })
   );
 
