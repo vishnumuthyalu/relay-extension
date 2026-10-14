@@ -29,8 +29,12 @@ sequenceDiagram
         DB->>Worker: job
         Worker->>DB: re-check mapping, read monthly usage
         alt under the cap
-            Worker->>Claude: summarize commits (structured output)
-            Claude-->>Worker: summary + token usage
+        opt tenant enabled richer summaries (docs/summaries.md)
+        Worker->>GitHub: merged PRs + compare (installation token)
+        Worker->>Claude: look up tickets via MCP connector (read-only tools)
+        end
+        Worker->>Claude: summarize commits + context (structured output)
+        Claude-->>Worker: summary + token usage
         else over the cap or Claude disabled
             Worker->>Worker: plain list of commit titles
         end

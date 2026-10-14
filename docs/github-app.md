@@ -24,15 +24,15 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 
 | Permission | Access | Why |
 |------------|--------|-----|
-| Repository → Contents | Read-only | Required to receive `push` events |
+| Repository → Contents | Read-only | Required to receive `push` events, and for change stats |
 | Repository → Metadata | Read-only | Always on |
+| Repository → Pull requests | Read-only | Optional: pull request context in summaries ([summaries.md](summaries.md)) |
 
 Subscribe to the **Push** event. GitHub always sends `installation` events to
 apps; Relay uses them to add, suspend and remove tenants.
 
-Relay asks for nothing else. If a future feature needs more (for example,
-reading pull requests for richer summaries), add that permission then;
-existing installations are asked to approve the change.
+Relay asks for nothing else. Adding a permission later prompts existing
+installations to approve the change.
 
 ## 3. Credentials → environment
 
@@ -42,6 +42,8 @@ existing installations are asked to approve the change.
 | Client ID | `GITHUB_CLIENT_ID` |
 | Generate a new client secret | `GITHUB_CLIENT_SECRET` |
 | Webhook secret you chose | `GITHUB_WEBHOOK_SECRET` |
+| App ID (optional, for pull request context) | `GITHUB_APP_ID` |
+| Generate a private key (optional, same) | `GITHUB_APP_PRIVATE_KEY` (the PEM; `\n` for line breaks is fine) |
 
 Keep them in `.env` locally and in your host's secret store in production.
 Never commit them.
@@ -58,7 +60,10 @@ separate development app, so changing those URLs never touches production.
   manage it, refreshed on every sign-in.
 - Client mappings (repository, client name and email, confirmation and
   unsubscribe state), sent digests, delivery ids and monthly usage counts.
-- Relay does **not** store GitHub tokens or source code.
+- If a tenant connects a ticket tracker: its MCP URL, allowed tool names and
+  an encrypted access token.
+- Relay does **not** store GitHub tokens or source code. Installation tokens
+  for pull request context live in memory for under an hour.
 
 Uninstalling the app sends an `installation.deleted` event, and Relay
 deletes everything above for that installation.
