@@ -28,10 +28,13 @@
   },
   "keywords": [],
   "dependencies": {
+    "@modelcontextprotocol/express": "^2.0.2",
+    "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/server": "^2.3.1",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "cookie-session": "^2.1.1",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-openapi-validator": "^5.6.2",
