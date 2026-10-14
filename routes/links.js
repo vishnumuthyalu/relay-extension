@@ -1,25 +1,10 @@
 const express = require('express');
 const db = require('../lib/db');
-const { escapeHtml } = require('../lib/email');
+const { page, escapeHtml } = require('../lib/html');
 
 // Pages clients reach from emails. GET only ever shows a button: mail
 // scanners prefetch links, and a GET that changed state would confirm or
 // unsubscribe people without them clicking anything.
-
-function page(title, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} · Relay</title>
-</head>
-<body style="font-family:sans-serif; max-width:520px; margin:64px auto; padding:0 16px; line-height:1.5;">
-  <h1 style="font-size:22px;">${escapeHtml(title)}</h1>
-  ${body}
-</body>
-</html>`;
-}
 
 function button(action, token, label) {
   return `<form method="post" action="${action}">
