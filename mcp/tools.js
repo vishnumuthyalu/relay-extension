@@ -1,10 +1,17 @@
 const { z } = require('zod');
+const { requireScopes } = require('@modelcontextprotocol/server');
 const { RelayError } = require('../lib/service');
 
 const repoSchema = z
   .string()
   .regex(/^[\w.-]+\/[\w.-]+$/, 'Use the owner/repo form, e.g. acme/website')
   .describe('GitHub repository as owner/repo');
+
+const accountSchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe('GitHub user or organization to act for. Only needed if you manage more than one; see list_accounts.');
 
 const mappingSchema = z.object({
   repo: z.string(),
@@ -31,15 +38,22 @@ const digestListItemSchema = z.object({
   sentAt: z.string(),
 });
 
+// OAuth scopes per tool. Over HTTP, a token without the scope gets a 403
+// challenge naming it, so the client can ask the user for more access.
+// Over stdio there is no token and these never fire.
+const READ = requireScopes('relay:read');
+const WRITE = requireScopes('relay:write');
+const SEND = requireScopes('relay:send');
+
 // Every tool returns its data twice: as structuredContent (validated
-// against outputSchema, for clients that read JSON) and as one line of
-// text (for clients and models that only read text).
+// against outputSchema, for clients that read JSON) and as text (for
+// clients and models that only read text).
 function ok(text, structuredContent) {
   return { content: [{ type: 'text', text }], structuredContent };
 }
 
-// Wraps a handler so expected problems come back as a tool error the
-// model can read and correct, rather than a protocol-level failure.
+// Expected problems come back as a tool error the model can read and
+// correct, rather than a protocol-level failure.
 function handle(fn) {
   return async (...args) => {
     try {
@@ -53,14 +67,34 @@ function handle(fn) {
   };
 }
 
-function registerRelayTools(server, svc) {
+// `relay` is { listAccounts(), resolve(account?) → service }. resolve picks
+// the installation the call acts on; see mcp/server.js.
+function registerRelayTools(server, relay) {
+  server.registerTool('list_accounts', {
+    title: 'List accounts',
+    description: 'List the GitHub accounts (users or organizations) with Relay installed that you can manage.',
+    outputSchema: z.object({
+      accounts: z.array(z.object({ account: z.string(), accountType: z.string(), suspended: z.boolean() })),
+    }),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    scopeChallenge: READ,
+  }, handle(async () => {
+    const accounts = await relay.listAccounts();
+    const text = accounts.length
+      ? accounts.map((a) => `${a.account} (${a.accountType})${a.suspended ? ' (suspended)' : ''}`).join('\n')
+      : 'No accounts yet. Install the Relay GitHub App first.';
+    return ok(text, { accounts });
+  }));
+
   server.registerTool('list_client_mappings', {
     title: 'List client mappings',
     description: 'List every repository Relay watches and the client who receives its digests.',
+    inputSchema: z.object({ account: accountSchema }),
     outputSchema: z.object({ mappings: z.array(mappingSchema) }),
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, handle(async () => {
-    const mappings = await svc.listMappings();
+    scopeChallenge: READ,
+  }, handle(async ({ account }) => {
+    const mappings = await (await relay.resolve(account)).listMappings();
     const text = mappings.length
       ? mappings.map((m) => `${m.repo} → ${m.clientName} <${m.clientEmail}> (${m.status})`).join('\n')
       : 'No repositories are mapped yet.';
@@ -73,6 +107,7 @@ function registerRelayTools(server, svc) {
       'Create or update which client receives digests for a repository. A new or changed address ' +
       'gets a confirmation email, and digests start only after the client confirms.',
     inputSchema: z.object({
+      account: accountSchema,
       repo: repoSchema,
       clientName: z.string().min(1).max(120).describe('How the client is greeted in the email'),
       clientEmail: z.email().describe('Where digests are sent'),
@@ -81,7 +116,9 @@ function registerRelayTools(server, svc) {
     outputSchema: mappingSchema.extend({ confirmationSent: z.boolean() }),
     // Sends a confirmation email when the address is new.
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  }, handle(async (args) => {
+    scopeChallenge: WRITE,
+  }, handle(async ({ account, ...args }) => {
+    const svc = await relay.resolve(account);
     const mapping = await svc.setMapping({ ...args, branch: args.branch ?? null });
     const note = mapping.confirmationSent
       ? ` A confirmation email went to ${mapping.clientEmail}; digests start once they confirm.`
@@ -92,11 +129,12 @@ function registerRelayTools(server, svc) {
   server.registerTool('remove_client_mapping', {
     title: 'Remove a client mapping',
     description: 'Stop sending digests for a repository. Its digest history is kept.',
-    inputSchema: z.object({ repo: repoSchema }),
+    inputSchema: z.object({ account: accountSchema, repo: repoSchema }),
     outputSchema: z.object({ repo: z.string(), removed: z.boolean() }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-  }, handle(async ({ repo }) => {
-    const result = await svc.removeMapping({ repo });
+    scopeChallenge: WRITE,
+  }, handle(async ({ account, repo }) => {
+    const result = await (await relay.resolve(account)).removeMapping({ repo });
     return ok(result.removed ? `Removed the mapping for ${repo}.` : `${repo} was not mapped.`, result);
   }));
 
@@ -106,6 +144,7 @@ function registerRelayTools(server, svc) {
       'Summarize a list of commit messages exactly as Relay would for the client, without sending anything. ' +
       'Use it to check tone before real pushes go out.',
     inputSchema: z.object({
+      account: accountSchema,
       repo: repoSchema,
       commits: z
         .array(z.object({
@@ -118,7 +157,9 @@ function registerRelayTools(server, svc) {
     outputSchema: summarySchema,
     // Calls Claude, but changes nothing in Relay or the outside world.
     annotations: { readOnlyHint: true, openWorldHint: true },
-  }, handle(async ({ repo, commits }) => {
+    scopeChallenge: READ,
+  }, handle(async ({ account, repo, commits }) => {
+    const svc = await relay.resolve(account);
     const summary = await svc.previewDigest({
       repo,
       commits: commits.map((c) => ({ message: c.message, author: c.author ? { name: c.author } : undefined })),
@@ -130,11 +171,12 @@ function registerRelayTools(server, svc) {
   server.registerTool('send_test_digest', {
     title: 'Send a test digest',
     description: "Email a sample digest to the repository's confirmed client to check delivery works.",
-    inputSchema: z.object({ repo: repoSchema }),
+    inputSchema: z.object({ account: accountSchema, repo: repoSchema }),
     outputSchema: z.object({ repo: z.string(), sentTo: z.string() }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, handle(async ({ repo }) => {
-    const result = await svc.sendTestDigest({ repo });
+    scopeChallenge: SEND,
+  }, handle(async ({ account, repo }) => {
+    const result = await (await relay.resolve(account)).sendTestDigest({ repo });
     return ok(`Test digest for ${repo} sent to ${result.sentTo}.`, result);
   }));
 
@@ -142,13 +184,15 @@ function registerRelayTools(server, svc) {
     title: 'List recent digests',
     description: 'Show digests Relay has emailed, newest first, optionally for one repository.',
     inputSchema: z.object({
+      account: accountSchema,
       repo: repoSchema.optional(),
       limit: z.number().int().min(1).max(50).default(10),
     }),
     outputSchema: z.object({ digests: z.array(digestListItemSchema) }),
     annotations: { readOnlyHint: true, openWorldHint: false },
-  }, handle(async ({ repo, limit }) => {
-    const digests = (await svc.listDigests({ repo, limit })).map((d) => ({
+    scopeChallenge: READ,
+  }, handle(async ({ account, repo, limit }) => {
+    const digests = (await (await relay.resolve(account)).listDigests({ repo, limit })).map((d) => ({
       deliveryId: d.deliveryId,
       repo: d.repo,
       recipient: d.recipient,
@@ -165,11 +209,12 @@ function registerRelayTools(server, svc) {
   server.registerTool('resend_digest', {
     title: 'Resend a digest',
     description: "Email a previously sent digest again, to the repository's current client.",
-    inputSchema: z.object({ deliveryId: z.string().min(1).describe('From list_recent_digests') }),
+    inputSchema: z.object({ account: accountSchema, deliveryId: z.string().min(1).describe('From list_recent_digests') }),
     outputSchema: z.object({ deliveryId: z.string(), sentTo: z.string() }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  }, handle(async ({ deliveryId }) => {
-    const result = await svc.resendDigest({ deliveryId });
+    scopeChallenge: SEND,
+  }, handle(async ({ account, deliveryId }) => {
+    const result = await (await relay.resolve(account)).resendDigest({ deliveryId });
     return ok(`Digest ${deliveryId} re-sent to ${result.sentTo}.`, result);
   }));
 }

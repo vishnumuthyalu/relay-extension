@@ -2,7 +2,7 @@
 // Relay MCP server over stdio, for running against your own Relay
 // database from an MCP client on this machine (Claude Code, Claude
 // Desktop, VS Code, Cursor). It acts for one installation, set by
-// RELAY_INSTALLATION_ID. Hosted users connect to /mcp instead (Phase 4).
+// RELAY_INSTALLATION_ID. Hosted users connect to /mcp instead.
 //
 // stdout carries the MCP protocol, so nothing else may write to it.
 // Everything human-readable goes to stderr.
@@ -19,8 +19,7 @@ const { createPool } = require('../lib/db/pool');
 const { getInstallation } = require('../lib/db');
 const { createLinks } = require('../lib/links');
 const { createPipeline } = require('../lib/pipeline');
-const { createRelayService } = require('../lib/service');
-const { createRelayMcpServer } = require('./server');
+const { createRelayMcpServer, forInstallation } = require('./server');
 
 async function main() {
   const config = loadConfig(process.env, { required: REQUIRED_FOR_MCP_STDIO });
@@ -34,8 +33,8 @@ async function main() {
   if (!installation) throw new Error(`Installation ${installationId} is not in the Relay database.`);
 
   const links = createLinks({ secret: config.sessionSecret, publicUrl: config.publicUrl });
-  const svc = createRelayService({ pool, config, installation, pipeline: createPipeline({ config, links }) });
-  const server = createRelayMcpServer(svc);
+  const pipeline = createPipeline({ config, links });
+  const server = createRelayMcpServer(forInstallation({ pool, pipeline, config, installation }));
   await server.connect(new StdioServerTransport());
   console.error(`relay-mcp: ready on stdio for ${installation.account_login} (${installationId})`);
 }
