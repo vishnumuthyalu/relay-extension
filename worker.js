@@ -9,6 +9,9 @@ const { migrate } = require('./lib/db/migrate');
 const { createLinks } = require('./lib/links');
 const { createPipeline } = require('./lib/pipeline');
 const { createProcessPush } = require('./lib/jobs/process-push');
+const { createGithubApp } = require('./lib/github-app');
+const { createContextGatherer } = require('./lib/context');
+const { parseKey } = require('./lib/crypto-box');
 const { startQueue, PROCESS_PUSH } = require('./lib/queue');
 
 async function main() {
@@ -19,7 +22,15 @@ async function main() {
 
   const links = createLinks({ secret: config.sessionSecret, publicUrl: config.publicUrl });
   const pipeline = createPipeline({ config, links });
-  const processPush = createProcessPush({ pool, pipeline, config });
+  // Optional richer summaries: GitHub context needs the app's id and
+  // private key; ticket context needs INTEGRATIONS_KEY.
+  const githubApp = config.github.appId && config.github.privateKey
+    ? createGithubApp({ appId: config.github.appId, privateKey: config.github.privateKey })
+    : null;
+  const integrationsKey = config.integrationsKey ? parseKey(config.integrationsKey) : null;
+  const gatherContext = createContextGatherer({ config, githubApp, integrationsKey, log });
+  const processPush = createProcessPush({ pool, pipeline, config, gatherContext });
+
   const queue = await startQueue({ connectionString: config.databaseUrl, log });
 
   await queue.boss.work(PROCESS_PUSH, { includeMetadata: true }, async (jobs) => {

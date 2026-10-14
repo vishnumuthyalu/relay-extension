@@ -34,7 +34,7 @@ const deliveryRow = async (id) => (await pool.query('SELECT * FROM deliveries WH
 test('sends a Claude-written digest with an unsubscribe header and records it', async () => {
   const t = await setup();
   await t.claim('p-1');
-  await expect(t.processPush(t.job('p-1'))).resolves.toEqual({ outcome: 'sent', kind: 'ai' });
+  await expect(t.processPush(t.job('p-1'))).resolves.toEqual({ outcome: 'sent', kind: 'ai', enriched: false });
 
   expect(t.summarize).toHaveBeenCalledTimes(1);
   const email = t.send.mock.calls[0][0];
@@ -52,7 +52,7 @@ test('over the monthly cap, sends a plain digest without calling Claude', async 
   const t = await setup();
   for (let i = 0; i < 3; i++) await db.addUsage(pool, t.installationId, { kind: 'ai' }); // cap is 3 in tests
   await t.claim('p-cap');
-  await expect(t.processPush(t.job('p-cap'))).resolves.toEqual({ outcome: 'sent', kind: 'fallback' });
+  await expect(t.processPush(t.job('p-cap'))).resolves.toEqual({ outcome: 'sent', kind: 'fallback', enriched: false });
 
   expect(t.summarize).not.toHaveBeenCalled();
   expect(t.send.mock.calls[0][0].subject).toBe('2 new updates on acme/site');
@@ -93,4 +93,28 @@ test('a failure keeps the claim until the final attempt, then releases it', asyn
 
   await expect(t.processPush(t.job('p-fail'), { isFinalAttempt: true })).rejects.toThrow('Resend down');
   expect(await deliveryRow('p-fail')).toBeUndefined();
+});
+
+test('adds gathered context to the summary and counts its tokens', async () => {
+  const config = testConfig();
+  const t = await setup({ config });
+  await db.setEnrichment(pool, t.installationId, true);
+  const gatherContext = jest.fn().mockResolvedValue({ text: 'Pull request #42: Saved cards', usage: { inputTokens: 30, outputTokens: 10 } });
+  const processPush = createProcessPush({ pool, pipeline: t.pipeline, config, gatherContext });
+
+  await t.claim('p-ctx');
+  await expect(processPush(t.job('p-ctx'))).resolves.toEqual({ outcome: 'sent', kind: 'ai', enriched: true });
+  expect(t.summarize).toHaveBeenCalledWith(expect.objectContaining({ context: 'Pull request #42: Saved cards' }));
+  expect(await db.getMonthlyUsage(pool, t.installationId)).toMatchObject({ inputTokens: 130, outputTokens: 60 });
+});
+
+test('skips context gathering when the tenant has not turned it on', async () => {
+  const config = testConfig();
+  const t = await setup({ config });
+  const gatherContext = jest.fn();
+  const processPush = createProcessPush({ pool, pipeline: t.pipeline, config, gatherContext });
+  await t.claim('p-noctx');
+  await processPush(t.job('p-noctx'));
+  expect(gatherContext).not.toHaveBeenCalled();
+  expect(t.summarize).toHaveBeenCalledWith(expect.objectContaining({ context: undefined }));
 });
