@@ -90,6 +90,9 @@ async function handlePush(pool, queue, req, res) {
       deliveryId,
       installationId,
       repo,
+      ref: payload.ref,
+      before: payload.before,
+      after: payload.after,
       pusher: payload.pusher.name,
       // Only what the summary needs; keeps job rows small.
       commits: payload.commits.slice(0, MAX_COMMITS_IN_PROMPT).map((c) => ({

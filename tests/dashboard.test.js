@@ -15,9 +15,10 @@ beforeAll(async () => {
   await db.upsertInstallation(pool, OTHER);
 });
 afterAll(() => testDb.destroy());
+const INTEGRATIONS_KEY = require('crypto').randomBytes(32).toString('base64');
 
 beforeEach(() => {
-  const config = testConfig();
+  const config = testConfig({ INTEGRATIONS_KEY });
   mocks = testPipeline(config);
   app = createApp({ config, pool, queue: {}, pipeline: mocks.pipeline, links: mocks.links, github: fakeGithub(USER, [MINE]) });
 });
@@ -92,5 +93,36 @@ test('sign out clears the session', async () => {
   const { csrf } = await openAccount(agent);
   const out = await agent.post('/dashboard/logout').type('form').send({ _csrf: csrf });
   expect(out.status).toBe(302);
+  expect(out.headers.location).toBe('/signed-out');
+  expect((await agent.get('/signed-out')).text).toContain('signed out');
   expect((await agent.get('/dashboard')).status).toBe(302);
+});
+
+test('connecting a ticket tracker stores the token encrypted and never shows it', async () => {
+  const agent = await signIn(request.agent(app));
+  const { csrf } = await openAccount(agent);
+  const res = await agent.post(`/dashboard/${MINE.id}/integration`).type('form').send({
+    _csrf: csrf, name: 'Linear', mcpUrl: 'https://mcp.tracker.example/mcp', token: 'lin_api_supersecret', allowedTools: 'get_issue, search_issues',
+  });
+  expect(res.status).toBe(302);
+
+  const row = await db.getIntegration(pool, MINE.id);
+  expect(row.allowed_tools).toEqual(['get_issue', 'search_issues']);
+  expect(row.token_encrypted).not.toContain('supersecret');
+
+  const { res: page } = await openAccount(agent);
+  expect(page.text).toContain('Ticket tracker: <strong>Linear</strong>');
+  expect(page.text).not.toContain('supersecret');
+});
+
+test('a tracker on a private host is refused', async () => {
+  const agent = await signIn(request.agent(app));
+  const { csrf } = await openAccount(agent);
+  await agent.post(`/dashboard/${MINE.id}/integration/remove`).type('form').send({ _csrf: csrf });
+  await agent.post(`/dashboard/${MINE.id}/integration`).type('form').send({
+    _csrf: csrf, name: 'Evil', mcpUrl: 'https://169.254.169.254/latest', token: 't', allowedTools: 'get_issue',
+  });
+  const { res } = await openAccount(agent);
+  expect(res.text).toContain('must be https on a public host');
+  expect(await db.getIntegration(pool, MINE.id)).toBeNull();
 });

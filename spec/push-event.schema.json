@@ -7,6 +7,8 @@
   "required": ["ref", "repository", "pusher", "commits"],
   "properties": {
     "ref": { "type": "string" },
+    "before": { "type": "string", "description": "SHA the branch pointed at before the push (all zeros for a new branch)" },
+    "after": { "type": "string", "description": "SHA the branch points at after the push" },
     "deleted": {
       "type": "boolean",
       "description": "True when the push deleted the branch; Relay ignores these."
