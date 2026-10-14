@@ -5,20 +5,24 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-COPY server.js ./
+COPY server.js worker.js ./
 COPY lib ./lib
+COPY routes ./routes
+COPY migrations ./migrations
+COPY mcp ./mcp
 COPY spec ./spec
 
 # Run as the image's unprivileged "node" user, and keep the SQLite file on
 # a volume so it survives container restarts and image upgrades.
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# Unprivileged user; all state lives in Postgres, so no volume is needed.
 USER node
-VOLUME ["/app/data"]
 
 ENV PORT=3000
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/health" || exit 1
 
-CMD ["node", "--experimental-sqlite", "server.js"]
+# One image, two processes: the web process by default; run the worker
+# with `node worker.js` (see docker-compose.yml).
+CMD ["node", "server.js"]

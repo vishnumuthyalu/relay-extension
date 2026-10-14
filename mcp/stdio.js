@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Relay MCP server over stdio, for MCP clients on this machine
-// (Claude Code, Claude Desktop, VS Code, Cursor).
+// Relay MCP server over stdio, for running against your own Relay
+// database from an MCP client on this machine (Claude Code, Claude
+// Desktop, VS Code, Cursor). It acts for one installation, set by
+// RELAY_INSTALLATION_ID. Hosted users connect to /mcp instead (Phase 4).
 //
 // stdout carries the MCP protocol, so nothing else may write to it.
 // Everything human-readable goes to stderr.
@@ -12,21 +14,33 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
 const { StdioServerTransport } = require('@modelcontextprotocol/server/stdio');
+const { loadConfig, REQUIRED_FOR_MCP_STDIO } = require('../lib/config');
+const { createPool } = require('../lib/db/pool');
+const { getInstallation } = require('../lib/db');
+const { createLinks } = require('../lib/links');
+const { createPipeline } = require('../lib/pipeline');
+const { createRelayService } = require('../lib/service');
 const { createRelayMcpServer } = require('./server');
-const { createLocalService } = require('./service');
 
 async function main() {
-  const missing = ['ANTHROPIC_API_KEY', 'RESEND_API_KEY', 'FROM_EMAIL'].filter((k) => !process.env[k]);
-  if (missing.length) {
-    console.error(`relay-mcp: missing env vars ${missing.join(', ')}; preview and send tools will fail.`);
+  const config = loadConfig(process.env, { required: REQUIRED_FOR_MCP_STDIO });
+  const installationId = Number(process.env.RELAY_INSTALLATION_ID);
+  if (!Number.isSafeInteger(installationId)) {
+    throw new Error('Set RELAY_INSTALLATION_ID to the GitHub App installation this server acts for.');
   }
 
-  const server = createRelayMcpServer(createLocalService());
+  const pool = createPool({ connectionString: config.databaseUrl, max: 2 });
+  const installation = await getInstallation(pool, installationId);
+  if (!installation) throw new Error(`Installation ${installationId} is not in the Relay database.`);
+
+  const links = createLinks({ secret: config.sessionSecret, publicUrl: config.publicUrl });
+  const svc = createRelayService({ pool, config, installation, pipeline: createPipeline({ config, links }) });
+  const server = createRelayMcpServer(svc);
   await server.connect(new StdioServerTransport());
-  console.error('relay-mcp: ready on stdio');
+  console.error(`relay-mcp: ready on stdio for ${installation.account_login} (${installationId})`);
 }
 
 main().catch((err) => {
-  console.error('relay-mcp: failed to start', err);
+  console.error(`relay-mcp: ${err.message}`);
   process.exit(1);
 });

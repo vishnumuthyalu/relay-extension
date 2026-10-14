@@ -10,30 +10,35 @@
     "url": "https://github.com/vishnumuthyalu/relay-extension.git"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.12.0"
   },
-  
   "bin": {
     "relay-mcp": "mcp/stdio.js"
   },
   "scripts": {
-    "start": "node --experimental-sqlite server.js",
-    "dev": "node --experimental-sqlite --watch server.js",
-    "test": "node --experimental-sqlite ./node_modules/jest/bin/jest.js",
+    "start": "node server.js",
+    "worker": "node worker.js",
+    "dev": "node --watch server.js",
+    "dev:worker": "node --watch worker.js",
+    "migrate": "node lib/db/migrate.js",
+    "test": "jest",
     "lint": "eslint .",
-    "mcp": "node --experimental-sqlite mcp/stdio.js",
-    "mcp:inspect": "npx @modelcontextprotocol/inspector node --experimental-sqlite mcp/stdio.js"
+    "mcp": "node mcp/stdio.js",
+    "mcp:inspect": "npx @modelcontextprotocol/inspector node mcp/stdio.js"
   },
   "keywords": [],
   "dependencies": {
     "@modelcontextprotocol/server": "^2.3.1",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "cookie-session": "^2.1.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-openapi-validator": "^5.6.2",
     "express-rate-limit": "^8.7.0",
     "helmet": "^8.3.0",
+    "pg": "^8.23.1",
+    "pg-boss": "^12.38.0",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
     "zod": "^4.6.7"

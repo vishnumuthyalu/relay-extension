@@ -10,9 +10,9 @@ const INSTRUCTIONS = [
   'calling send_test_digest or resend_digest, because those send real email.',
 ].join(' ');
 
-// One fully registered Relay MCP server, independent of transport. The
-// stdio entrypoint uses it now; the HTTP endpoint in Phase 4 builds one
-// per request with a tenant-scoped service.
+// One fully registered Relay MCP server for one installation, independent
+// of transport. `svc` comes from lib/service.js. The stdio entrypoint
+// builds one at startup; the HTTP endpoint builds one per request.
 function createRelayMcpServer(svc) {
   const server = new McpServer({ name: 'relay', version }, { instructions: INSTRUCTIONS });
   registerRelayTools(server, svc);

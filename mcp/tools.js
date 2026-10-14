@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { RelayError } = require('./service');
+const { RelayError } = require('../lib/service');
 
 const repoSchema = z
   .string()
@@ -10,6 +10,8 @@ const mappingSchema = z.object({
   repo: z.string(),
   clientName: z.string(),
   clientEmail: z.string(),
+  branch: z.string().nullable(),
+  status: z.enum(['pending', 'active', 'unsubscribed']).describe('pending until the client confirms by email'),
   updatedAt: z.string(),
 });
 
@@ -58,26 +60,33 @@ function registerRelayTools(server, svc) {
     outputSchema: z.object({ mappings: z.array(mappingSchema) }),
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, handle(async () => {
-    const mappings = svc.listMappings();
+    const mappings = await svc.listMappings();
     const text = mappings.length
-      ? mappings.map((m) => `${m.repo} → ${m.clientName} <${m.clientEmail}>`).join('\n')
+      ? mappings.map((m) => `${m.repo} → ${m.clientName} <${m.clientEmail}> (${m.status})`).join('\n')
       : 'No repositories are mapped yet.';
     return ok(text, { mappings });
   }));
 
   server.registerTool('set_client_mapping', {
     title: 'Map a repo to a client',
-    description: 'Create or update which client receives digests for a repository.',
+    description:
+      'Create or update which client receives digests for a repository. A new or changed address ' +
+      'gets a confirmation email, and digests start only after the client confirms.',
     inputSchema: z.object({
       repo: repoSchema,
       clientName: z.string().min(1).max(120).describe('How the client is greeted in the email'),
       clientEmail: z.email().describe('Where digests are sent'),
+      branch: z.string().min(1).optional().describe("Branch to watch; defaults to the repo's default branch"),
     }),
-    outputSchema: mappingSchema,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    outputSchema: mappingSchema.extend({ confirmationSent: z.boolean() }),
+    // Sends a confirmation email when the address is new.
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, handle(async (args) => {
-    const mapping = svc.setMapping(args);
-    return ok(`Mapped ${mapping.repo} → ${mapping.clientName} <${mapping.clientEmail}>`, mapping);
+    const mapping = await svc.setMapping({ ...args, branch: args.branch ?? null });
+    const note = mapping.confirmationSent
+      ? ` A confirmation email went to ${mapping.clientEmail}; digests start once they confirm.`
+      : '';
+    return ok(`Mapped ${mapping.repo} → ${mapping.clientName} <${mapping.clientEmail}> (${mapping.status}).${note}`, mapping);
   }));
 
   server.registerTool('remove_client_mapping', {
@@ -87,7 +96,7 @@ function registerRelayTools(server, svc) {
     outputSchema: z.object({ repo: z.string(), removed: z.boolean() }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, handle(async ({ repo }) => {
-    const result = svc.removeMapping({ repo });
+    const result = await svc.removeMapping({ repo });
     return ok(result.removed ? `Removed the mapping for ${repo}.` : `${repo} was not mapped.`, result);
   }));
 
@@ -120,7 +129,7 @@ function registerRelayTools(server, svc) {
 
   server.registerTool('send_test_digest', {
     title: 'Send a test digest',
-    description: "Email a sample digest to the repository's mapped client to confirm delivery works.",
+    description: "Email a sample digest to the repository's confirmed client to check delivery works.",
     inputSchema: z.object({ repo: repoSchema }),
     outputSchema: z.object({ repo: z.string(), sentTo: z.string() }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -139,7 +148,7 @@ function registerRelayTools(server, svc) {
     outputSchema: z.object({ digests: z.array(digestListItemSchema) }),
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, handle(async ({ repo, limit }) => {
-    const digests = svc.listDigests({ repo, limit }).map((d) => ({
+    const digests = (await svc.listDigests({ repo, limit })).map((d) => ({
       deliveryId: d.deliveryId,
       repo: d.repo,
       recipient: d.recipient,

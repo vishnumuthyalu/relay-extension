@@ -11,6 +11,22 @@ jobs:
     strategy:
       matrix:
         node-version: [22.x, 24.x]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+          POSTGRES_DB: relay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://relay:relay@localhost:5432/relay_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,15 +36,10 @@ jobs:
       - run: npm ci
       - name: Lint OpenAPI contract
         run: npx @stoplight/spectral-cli lint spec/openapi.yaml --ruleset .spectral.yaml
-      - name: Validate JSON Schema contract
-        run: node -e "const Ajv2020=require('ajv/dist/2020');new Ajv2020({strict:true}).compile(require('./spec/summary.schema.json'))"
+      - name: Validate JSON Schema contracts
+        run: |
+          node -e "const Ajv2020=require('ajv/dist/2020');const a=new Ajv2020({strict:true});require('ajv-formats')(a);a.compile(require('./spec/summary.schema.json'));a.compile(require('./spec/push-event.schema.json'))"
       - name: Lint code
         run: npm run lint
       - name: Test
         run: npm test
-        env:
-          GITHUB_WEBHOOK_SECRET: ci-secret
-          ANTHROPIC_API_KEY: ci-key
-          RESEND_API_KEY: ci-key
-          FROM_EMAIL: ci@example.com
-          CONFIG_API_KEY: ci-key

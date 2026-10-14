@@ -1,0 +1,47 @@
+# Local development: Postgres plus the Relay web and worker processes.
+#
+#   docker compose up -d db          # just the database (for npm run dev / npm test)
+#   docker compose up --build        # everything
+#
+# Secrets come from .env (see .env.example). DATABASE_URL is overridden
+# here so the containers reach the db service.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/create-test-db.sql:/docker-entrypoint-initdb.d/create-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 5s
+      retries: 10
+
+  web:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://relay:relay@db:5432/relay
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["node", "worker.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://relay:relay@db:5432/relay
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

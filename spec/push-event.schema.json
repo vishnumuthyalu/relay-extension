@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://relay.example/schemas/push-event.json",
+  "title": "PushEvent",
+  "description": "The subset of GitHub's push webhook payload Relay depends on. Everything else is ignored.",
+  "type": "object",
+  "required": ["ref", "repository", "pusher", "commits"],
+  "properties": {
+    "ref": { "type": "string" },
+    "deleted": {
+      "type": "boolean",
+      "description": "True when the push deleted the branch; Relay ignores these."
+    },
+    "installation": {
+      "type": "object",
+      "description": "Present on deliveries to a GitHub App.",
+      "required": ["id"],
+      "properties": { "id": { "type": "integer" } }
+    },
+    "repository": {
+      "type": "object",
+      "required": ["full_name"],
+      "properties": {
+        "full_name": { "type": "string" },
+        "default_branch": { "type": "string" },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "login": { "type": "string" },
+            "type": { "type": "string" }
+          }
+        }
+      }
+    },
+    "pusher": {
+      "type": "object",
+      "required": ["name"],
+      "properties": { "name": { "type": "string" } }
+    },
+    "commits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "message", "url"],
+        "properties": {
+          "id": { "type": "string" },
+          "message": { "type": "string" },
+          "url": { "type": "string", "format": "uri" },
+          "author": {
+            "type": "object",
+            "properties": { "name": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

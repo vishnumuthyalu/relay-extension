@@ -1,99 +1,68 @@
-// One-off local test tool: simulates a GitHub "push" webhook delivery
-// against a locally running instance of this app (e.g. the Docker
-// container from `docker run ... -p 3000:3000 ...`), so you can confirm
-// the full pipeline (signature check -> dedup -> Claude summary -> email)
-// without needing a real GitHub push.
+// Local test tool: sends a signed GitHub App "push" delivery to a running
+// Relay (npm run dev, or docker compose up), so you can exercise the full
+// path (signature → claim → queue → worker → email) without a real push.
 //
-// Usage:
-//   1. Set SIM_CLIENT_EMAIL (and optionally SIM_REPO, SIM_BASE_URL) in .env.
-//   2. node simulate-webhook.js
+// Before running:
+//   1. The installation exists (install the app once, or let this script's
+//      first push create it), and SIM_REPO is mapped to a client who has
+//      confirmed (map it through the API, the dashboard or the MCP tools,
+//      then click the confirmation email).
+//   2. Set GITHUB_WEBHOOK_SECRET, SIM_INSTALLATION_ID and SIM_REPO in .env.
 //
-// Reads GITHUB_WEBHOOK_SECRET and CONFIG_API_KEY from .env in this
-// directory (same values the running container was started with).
-
+// Usage: node simulate-webhook.js
 require('dotenv/config');
 const crypto = require('crypto');
 
-// ---- CONFIG: set these in .env ----
 const BASE_URL = process.env.SIM_BASE_URL || 'http://localhost:3000';
-const REPO = process.env.SIM_REPO || 'acme/test-repo'; // any owner/repo string, doesn't need to be real
-// Resend's sandbox sender (onboarding@resend.dev) can only deliver to the
-// address on your Resend account, so put that address here until you
-// verify a sending domain.
-const CLIENT_EMAIL = process.env.SIM_CLIENT_EMAIL;
-const CLIENT_NAME = process.env.SIM_CLIENT_NAME || 'Test Client';
-// -----------------------------
+const REPO = process.env.SIM_REPO || 'acme/test-repo';
+const INSTALLATION_ID = Number(process.env.SIM_INSTALLATION_ID);
+const SECRET = process.env.GITHUB_WEBHOOK_SECRET;
 
-const CONFIG_API_KEY = process.env.CONFIG_API_KEY;
-const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
-
-if (!CONFIG_API_KEY || !GITHUB_WEBHOOK_SECRET || !CLIENT_EMAIL) {
-  console.error('Missing CONFIG_API_KEY, GITHUB_WEBHOOK_SECRET or SIM_CLIENT_EMAIL — is .env present and loaded?');
+if (!SECRET || !Number.isSafeInteger(INSTALLATION_ID)) {
+  console.error('Set GITHUB_WEBHOOK_SECRET and SIM_INSTALLATION_ID in .env first.');
   process.exit(1);
 }
 
-function sign(rawBody, secret) {
-  return 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-}
+const [owner] = REPO.split('/');
+const payload = {
+  ref: 'refs/heads/main',
+  installation: { id: INSTALLATION_ID },
+  repository: { full_name: REPO, default_branch: 'main', owner: { login: owner, type: 'User' } },
+  pusher: { name: 'octocat' },
+  commits: [
+    {
+      id: 'a1b2c3d',
+      message: 'Fix off-by-one bug in pagination',
+      url: `https://github.com/${REPO}/commit/a1b2c3d`,
+      author: { name: 'octocat' },
+    },
+    {
+      id: 'e4f5a6b',
+      message: 'Add saved cards to checkout',
+      url: `https://github.com/${REPO}/commit/e4f5a6b`,
+      author: { name: 'octocat' },
+    },
+  ],
+};
 
-async function upsertClientConfig() {
-  const res = await fetch(`${BASE_URL}/config`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'X-Config-Key': CONFIG_API_KEY },
-    body: JSON.stringify({ repo: REPO, clientEmail: CLIENT_EMAIL, clientName: CLIENT_NAME }),
-  });
-  const body = await res.json().catch(() => ({}));
-  console.log(`[1/2] POST /config -> ${res.status}`, body);
-  if (!res.ok) throw new Error('Could not map client — check CONFIG_API_KEY and that the server is running.');
-}
-
-async function sendFakePush() {
-  const payload = {
-    ref: 'refs/heads/main',
-    repository: { full_name: REPO },
-    pusher: { name: 'octocat' },
-    commits: [
-      {
-        id: 'a1b2c3d',
-        message: 'Fix off-by-one bug in pagination',
-        url: `https://github.com/${REPO}/commit/a1b2c3d`,
-        author: { name: 'octocat' },
-      },
-      {
-        id: 'e4f5g6h',
-        message: 'Add rate limiting to the config endpoint',
-        url: `https://github.com/${REPO}/commit/e4f5g6h`,
-        author: { name: 'octocat' },
-      },
-    ],
-  };
-  const rawBody = Buffer.from(JSON.stringify(payload));
-  const signature = sign(rawBody, GITHUB_WEBHOOK_SECRET);
+(async () => {
+  const raw = Buffer.from(JSON.stringify(payload));
   const deliveryId = crypto.randomUUID();
-
   const res = await fetch(`${BASE_URL}/webhook/github`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'X-Hub-Signature-256': signature,
+      'X-Hub-Signature-256': 'sha256=' + crypto.createHmac('sha256', SECRET).update(raw).digest('hex'),
       'X-GitHub-Event': 'push',
       'X-GitHub-Delivery': deliveryId,
     },
-    body: rawBody,
+    body: raw,
   });
-  const body = await res.json().catch(() => ({}));
-  console.log(`[2/2] POST /webhook/github -> ${res.status}`, body);
-  console.log(`      delivery id: ${deliveryId} (re-running this script sends a NEW delivery id each time,`);
-  console.log('      so it will not be deduped — that only kicks in on a genuine GitHub retry.)');
-}
-
-(async () => {
-  try {
-    await upsertClientConfig();
-    await sendFakePush();
-    console.log('\nIf status was "accepted", check the inbox for', CLIENT_EMAIL, 'in a few seconds.');
-  } catch (err) {
-    console.error('\nFAILED:', err.message);
-    process.exit(1);
-  }
-})();
+  console.log(`POST /webhook/github -> ${res.status}`, await res.json().catch(() => ({})));
+  console.log(`delivery id: ${deliveryId}`);
+  console.log('"accepted" means the worker will send the digest; watch the worker logs.');
+  console.log('"filtered" usually means the repo is unmapped or the client has not confirmed yet.');
+})().catch((err) => {
+  console.error('FAILED:', err.message);
+  process.exit(1);
+});
