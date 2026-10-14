@@ -71,8 +71,8 @@ function createDashboardRouter({ pool, pipeline, config }) {
 
   router.get('/dashboard/:installationId', async (req, res) => {
     const { relay, installation } = req;
-    const [mappings, digests, usage] = await Promise.all([
-      relay.listMappings(), relay.listDigests({ limit: 10 }), relay.getUsage(),
+    const [mappings, digests, usage, settings] = await Promise.all([
+      relay.listMappings(), relay.listDigests({ limit: 10 }), relay.getUsage(), relay.getSummarySettings(),
     ]);
     const base = `/dashboard/${installation.id}`;
     const csrf = csrfToken(req);
@@ -108,6 +108,8 @@ function createDashboardRouter({ pool, pipeline, config }) {
         </div>
         <p class="muted">New clients get an email asking them to confirm. Digests start once they do.</p>
       </form>
+      <h2>Summaries</h2>
+      ${summarySettings(base, csrf, settings)}
       <h2>This month</h2>
       <p>${usage.digestsSent} of ${usage.monthlyCap} Claude-written digests used${usage.fallbackSent ? `, plus ${usage.fallbackSent} plain digests over the cap` : ''}.
       ${usage.claudeEnabled ? '' : '<span class="warn">Claude summaries are turned off on this server.</span>'}</p>
@@ -116,6 +118,36 @@ function createDashboardRouter({ pool, pipeline, config }) {
         : '<p class="muted">Nothing sent yet.</p>'}`,
     { nav: nav(req) }));
   });
+  function summarySettings(base, csrf, settings) {
+    const github = settings.githubContextAvailable
+      ? `<form method="post" action="${base}/settings/enrichment">${hidden({ _csrf: csrf, enabled: settings.enrichmentEnabled ? 'off' : 'on' })}
+          <p>Use merged pull request titles and descriptions: <strong>${settings.enrichmentEnabled ? 'on' : 'off'}</strong>
+          <button type="submit">Turn ${settings.enrichmentEnabled ? 'off' : 'on'}</button></p></form>`
+      : '<p class="muted">Pull request context isn\'t configured on this server.</p>';
+
+    let tracker;
+    if (!settings.integrationsAvailable) {
+      tracker = '<p class="muted">Ticket trackers aren\'t enabled on this server.</p>';
+    } else if (settings.integration) {
+      const i = settings.integration;
+      tracker = `<p>Ticket tracker: <strong>${escapeHtml(i.name)}</strong> <span class="muted">(${escapeHtml(i.mcpUrl)}; tools: ${escapeHtml(i.allowedTools.join(', '))})</span></p>
+        <form method="post" action="${base}/integration/remove">${hidden({ _csrf: csrf })}<button type="submit">Disconnect</button></form>`;
+    } else {
+      tracker = `<form method="post" action="${base}/integration">${hidden({ _csrf: csrf })}
+        <p>Connect a ticket tracker's MCP server, so digests can name the issues a push closes.</p>
+        <div class="row">
+          <label>Name<input name="name" placeholder="Linear" required maxlength="40"></label>
+          <label>MCP server URL<input name="mcpUrl" type="url" placeholder="https://…" required></label>
+          <label>Access token<input name="token" type="password" required autocomplete="off"></label>
+          <label>Read-only tools<input name="allowedTools" placeholder="get_issue" required></label>
+          <button type="submit">Connect</button>
+        </div>
+        <p class="muted">Claude may call only the tools you list here, so list read-only ones. The token is stored encrypted and never shown again.</p>
+      </form>`;
+    }
+    return github + tracker;
+  }
+
 
   // Runs a dashboard action, stores its outcome as a flash message and
   // redirects back (post/redirect/get).
@@ -153,6 +185,29 @@ function createDashboardRouter({ pool, pipeline, config }) {
     return `Test digest sent to ${sentTo}.`;
   }));
 
+    router.post('/dashboard/:installationId/settings/enrichment', act(async (req) => {
+    const enabled = req.body.enabled === 'on';
+    await req.relay.setEnrichment(enabled);
+    return `Pull request context turned ${enabled ? 'on' : 'off'}.`;
+  }));
+
+  router.post('/dashboard/:installationId/integration', act(async (req) => {
+    const allowedTools = String(req.body.allowedTools || '').split(',').map((t) => t.trim()).filter(Boolean);
+    await req.relay.saveIntegration({
+      name: String(req.body.name || '').trim(),
+      mcpUrl: String(req.body.mcpUrl || '').trim(),
+      token: String(req.body.token || '').trim(),
+      allowedTools,
+    });
+    return 'Ticket tracker connected.';
+  }));
+
+  router.post('/dashboard/:installationId/integration/remove', act(async (req) => {
+    await req.relay.removeIntegration();
+    return 'Ticket tracker disconnected.';
+  }));
+
+
   return router;
 }
 
@@ -163,7 +218,12 @@ function createLogoutRoute() {
   router.post('/dashboard/logout', express.urlencoded({ extended: false, limit: '1kb' }), (req, res) => {
     if (!validCsrf(req)) return res.status(403).send(page('Please try again', '<p>That form expired.</p>'));
     req.session = null;
-    res.redirect('/');
+    // Not '/': that bounces through /dashboard to GitHub sign-in, and GitHub
+    // signs a returning user straight back in without asking.
+    res.redirect('/signed-out');
+  });
+  router.get('/signed-out', (req, res) => {
+    res.send(page('Signed out', '<p>You are signed out of Relay.</p><p><a href="/auth/login">Sign in again</a></p>'));
   });
   return router;
 }
