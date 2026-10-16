@@ -12,8 +12,6 @@ COPY migrations ./migrations
 COPY mcp ./mcp
 COPY spec ./spec
 
-# Run as the image's unprivileged "node" user, and keep the SQLite file on
-# a volume so it survives container restarts and image upgrades.
 # Unprivileged user; all state lives in Postgres, so no volume is needed.
 USER node
 

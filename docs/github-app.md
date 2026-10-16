@@ -14,7 +14,8 @@ GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App*
 | GitHub App name | e.g. `Relay Digests` (its URL slug becomes `GITHUB_APP_SLUG`) |
 | Homepage URL | `PUBLIC_URL` |
 | Callback URL | `PUBLIC_URL/auth/callback` |
-| Request user authorization (OAuth) during installation | **On** |
+| Request user authorization (OAuth) during installation | **Off** |
+| Setup URL | `PUBLIC_URL/auth/login?returnTo=/dashboard` (tick **Redirect on update**) |
 | Webhook → Active | **On** |
 | Webhook URL | `PUBLIC_URL/webhook/github` |
 | Webhook secret | a random string → `GITHUB_WEBHOOK_SECRET` |
