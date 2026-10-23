@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.vishnumuthyalu/relay",
   "title": "Relay",
-  "description": "Turn GitHub pushes into plain-English client update emails. Map repos to clients, preview digests and review history.",
+  "description": "Turn GitHub pushes into plain-English client update emails. Map repos to clients and review digests.",
   "version": "1.0.0",
   "repository": {
     "url": "https://github.com/vishnumuthyalu/relay-extension",
