@@ -24,7 +24,8 @@
     "test": "jest",
     "lint": "eslint .",
     "mcp": "node mcp/stdio.js",
-    "mcp:inspect": "npx @modelcontextprotocol/inspector node mcp/stdio.js"
+    "mcp:inspect": "npx @modelcontextprotocol/inspector node mcp/stdio.js",
+    "test:coverage": "jest --coverage"
   },
   "keywords": [],
   "dependencies": {
