@@ -1,0 +1,30 @@
+name: MCP Registry
+
+# Publishes server.json to the official MCP Registry after a release is
+# deployed. The io.github.vishnumuthyalu/ namespace is proven with this
+# workflow's GitHub OIDC token, so no secret is needed.
+on:
+  workflow_run:
+    workflows: [Deploy]
+    types: [completed]
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set the registry version from the release tag
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          jq --arg v "${TAG#v}" '.version = $v' server.json > server.tmp && mv server.tmp server.json
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
