@@ -26,6 +26,7 @@ const { createAuthRouter } = require('./routes/auth');
 const { createDashboardRouter, createLogoutRoute } = require('./routes/dashboard');
 const { createApiRouter } = require('./routes/api');
 const { createLinksRouter } = require('./routes/links');
+const { createPublicPagesRouter } = require('./routes/pages');
 
 function createApp({ config, pool, queue, github, pipeline, links, fetchImpl = fetch }) {
   const app = express();
@@ -59,6 +60,7 @@ function createApp({ config, pool, queue, github, pipeline, links, fetchImpl = f
   app.use(createLogoutRoute());
   app.use(createDashboardRouter({ pool, pipeline, config }));
   app.use(createLinksRouter({ pool, links }));
+  app.use(createPublicPagesRouter());
 
   app.use(express.json());
   app.use(
@@ -70,11 +72,20 @@ function createApp({ config, pool, queue, github, pipeline, links, fetchImpl = f
       // the spec documents it.
       validateSecurity: false,
       // Routes above answer before reaching here; these are HTML, OAuth or MCP.
-      ignorePaths: /^\/(auth|install|confirm|unsubscribe|dashboard|oauth|mcp|\.well-known)(\/|$)/,
+      ignorePaths: /^\/(auth|install|confirm|unsubscribe|dashboard|oauth|mcp|privacy|\.well-known)(\/|$)/,
     })
   );
-
+  // Liveness: the process is up. Readiness: it can also reach Postgres,
+  // so the host only routes traffic to instances that can serve it.
   app.get('/health', (req, res) => res.json({ status: 'ok' }));
+  app.get('/ready', async (req, res) => {
+    try {
+      await pool.query('SELECT 1');
+      res.json({ status: 'ready' });
+    } catch {
+      res.status(503).json({ error: 'database unavailable' });
+    }
+  });
   app.use(createApiRouter({ pool, pipeline, config, github }));
 
   // OpenAPI validator errors + everything else land here

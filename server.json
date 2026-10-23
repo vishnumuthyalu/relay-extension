@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vishnumuthyalu/relay",
+  "title": "Relay",
+  "description": "Turn GitHub pushes into plain-English client update emails. Map repos to clients, preview digests and review history.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/vishnumuthyalu/relay-extension",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://relay-vishnu.fly.dev/mcp"
+    }
+  ]
+}

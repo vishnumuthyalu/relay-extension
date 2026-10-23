@@ -1,472 +1,194 @@
-# Relay Extension
+# Relay
 
-> **Automated client progress updates from GitHub pushes**
+> **Plain-English client updates from every GitHub push**
 
-[![CI](https://github.com/vishnumuthyalu/relay-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/relay-extension/actions/workflows/ci.yml)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen)](https://nodejs.org)
+[![CI](https://github.com/vishnumuthyalu/relay-extension/actions/workflows/ci.yml/badge.svg)](https://github.com/vishnumuthyalu/relay-extension/actions/workflows/ci.yml)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.12-brightgreen)](https://nodejs.org)
 
-Relay is a GitHub webhook-powered system that automatically generates non-technical email summaries of code changes and sends them to clients. Every time you push code, Claude AI summarizes the commits and Relay emails a digestible update to your configured client.
+**Live at [relay-vishnu.fly.dev](https://relay-vishnu.fly.dev/dashboard).** [Install the GitHub App](https://github.com/apps/relay-digests), then add `https://relay-vishnu.fly.dev/mcp` to your MCP client, find **Relay** in the [MCP Registry](https://registry.modelcontextprotocol.io), or install the extension from the VS Code Marketplace or Open VSX.
 
-## 🎯 Overview
+Relay is a GitHub App for freelancers and agencies. Install it on your repositories, map each one to a client, and every push to the main branch becomes a short, jargon-free email summary written by Claude. Clients confirm by email before anything is sent, and every digest has a one-click unsubscribe.
 
-When developers push code to GitHub:
-1. **GitHub** sends a webhook to your Relay backend
-2. **Relay** verifies the webhook signature and checks for duplicates
-3. **Claude AI** generates a client-friendly summary of the changes
-4. **Resend** delivers the email to your mapped client
-5. Your client stays informed without technical jargon
-
-This project consists of two parts:
-- **Backend Server**: Express.js webhook receiver with Claude integration
-- **VS Code Extension**: One-command setup for webhook registration and client mapping
-
-## ✨ Features
-
-- ✅ **Secure webhook handling** with HMAC signature verification
-- ✅ **Duplicate detection** via idempotency tracking
-- ✅ **AI-powered summaries** using Claude's API with JSON schema validation
-- ✅ **Branch filtering** (e.g., only notify on `main` branch pushes)
-- ✅ **Automatic retry logic** for API failures (Claude, Resend)
-- ✅ **Rate limiting & security headers** (Helmet, Express Rate Limit)
-- ✅ **OpenAPI contract validation** at runtime
-- ✅ **VS Code extension** for zero-friction setup
-- ✅ **Docker support** for easy deployment
-- ✅ **Comprehensive test suite** (Jest, contract testing)
-
-## 🏗️ Architecture
+## How it works
 
 ```mermaid
 sequenceDiagram
     participant Dev
     participant GitHub
-    participant Relay as Relay Backend
+    participant Web as Relay web
+    participant Queue as Postgres (pg-boss)
+    participant Worker as Relay worker
     participant Claude
     participant Resend
     participant Client
 
     Dev->>GitHub: git push
-    GitHub->>Relay: POST /webhook/github (HMAC-signed)
-    Relay->>Relay: verify signature, check X-GitHub-Delivery
-    alt already processed
-        Relay-->>GitHub: 200 duplicate
-    else new delivery
-        Relay->>Claude: summarize commits (JSON Schema contract)
-        Claude-->>Relay: validated summary
-        Relay->>Resend: send digest email
-        Resend-->>Client: digest email
-        Relay-->>GitHub: 200 processed
+    GitHub->>Web: POST /webhook/github (HMAC-signed, installation id)
+    Web->>Web: verify signature, claim X-GitHub-Delivery
+    alt duplicate, filtered, or client not confirmed
+        Web-->>GitHub: 200 duplicate / filtered
+    else new push for an active mapping
+        Web->>Queue: enqueue process-push
+        Web-->>GitHub: 202 accepted
+        Queue->>Worker: job
+        Worker->>Claude: summarize commits (structured output), unless over the monthly cap
+        Claude-->>Worker: validated summary
+        Worker->>Resend: digest email + List-Unsubscribe
+        Resend-->>Client: digest
     end
 ```
 
-## 📋 Prerequisites
+- **GitHub App**: one install connects any number of repositories, and no personal access tokens are needed ([ADR 002](docs/adr/002-github-app-over-pat.md)).
+- **Multi-tenant**: every row belongs to an installation, users are authorized by the installations GitHub says they can access, and uninstalling deletes that tenant's data.
+- **Postgres + pg-boss**: the webhook replies 202 immediately, and a separate worker sends digests with retries and backoff ([ADR 003](docs/adr/003-postgres-and-pg-boss.md)).
+- **Consent built in**: double opt-in confirmation, signed one-click unsubscribe (RFC 8058), and confirm/unsubscribe pages that only change state on POST.
+- **Cost controls**: per-installation monthly cap on Claude-written digests (plain digests past it), token usage tracking, and a `CLAUDE_ENABLED` kill switch.
+- **Spec-first**: OpenAPI 3.1 and JSON Schema contracts enforced at runtime and in CI.
+- **Remote MCP server with OAuth 2.1**: add one URL to Claude Code, Claude Desktop, VS Code or Cursor, sign in with GitHub, and manage Relay by chatting ([docs/mcp.md](docs/mcp.md), [ADR 004](docs/adr/004-mcp-as-cross-ide-surface.md), [ADR 005](docs/adr/005-separate-authorization-server.md)).
+- **Dashboard**: a small server-rendered UI at `/dashboard` for people who don't use MCP.
+- **Richer summaries (opt-in)**: merged PR descriptions from GitHub, and issue details from the tenant's ticket tracker through Anthropic's MCP connector, with read-only tool allowlists and fallbacks ([docs/summaries.md](docs/summaries.md)).
 
-- **Node.js** 22+ (for built-in SQLite support)
-- **GitHub Personal Access Token** with `admin:repo_hook` scope
-- **Anthropic API Key** (Claude access)
-- **Resend API Key** (email delivery)
-- **A publicly accessible URL** for webhook delivery (local testing: ngrok, localtunnel, etc.)
+## Running locally
 
-## 🚀 Installation
-
-### 1. Clone the Repository
+Prerequisites: Node.js 22.12+, Docker (for Postgres), a [GitHub App](docs/github-app.md), an Anthropic API key and a Resend API key.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/vishnumuthyalu/relay-extension.git
 cd relay-extension
-```
-
-### 2. Install Dependencies
-
-```bash
 npm install
+cp .env.example .env          # fill in the values; see docs/github-app.md
+docker compose up -d db       # Postgres on localhost:5432 (dev + test databases)
+npm run migrate
+npm run dev                   # web process on :3000
+npm run dev:worker            # worker process, in a second terminal
 ```
 
-### 3. Environment Configuration
+GitHub must reach your machine for webhooks and sign-in, so run a tunnel (`ngrok http 3000`) and use its URL as `PUBLIC_URL` and in the app settings.
 
-Create a `.env` file in the project root:
+Then:
 
-```env
-PORT=3000
-GITHUB_WEBHOOK_SECRET=your-random-secret-here
-ANTHROPIC_API_KEY=sk-ant-api03-...
-RESEND_API_KEY=re_...
-FROM_EMAIL=your-verified@domain.com
-CONFIG_API_KEY=another-random-secret
-ONLY_BRANCH=main
-```
+1. Open `PUBLIC_URL/install` and install the app on a repository.
+2. Open `PUBLIC_URL/dashboard` and sign in with GitHub.
+3. Map the repository to a client in the dashboard, with the API (below) or with the MCP tools. The client receives a confirmation email.
+4. After the client confirms, push to the default branch, or run `node simulate-webhook.js`.
 
-**Environment Variables:**
+To run everything in containers instead: `docker compose up --build`.
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `PORT` | Server port | No (default: 3000) |
-| `GITHUB_WEBHOOK_SECRET` | Shared secret for webhook HMAC | **Yes** |
-| `ANTHROPIC_API_KEY` | Claude API key | **Yes** |
-| `RESEND_API_KEY` | Resend API key | **Yes** |
-| `FROM_EMAIL` | Verified sender email (Resend) | **Yes** |
-| `CONFIG_API_KEY` | Secret for `/config` and `/test` endpoints | **Yes** |
-| `ONLY_BRANCH` | Only process pushes to this branch (e.g., `main`) | No |
-| `ANTHROPIC_MODEL` | Claude model ID | No (default: `claude-sonnet-4-5`) |
+## Deploying
 
-### 4. Start the Server
+One image, two processes (`web`, `worker`), one Postgres. The hosted instance runs on Fly.io (one web and one worker machine) with Supabase Postgres; migrations run as Fly's release command before each deploy. See [docs/deploy.md](docs/deploy.md). Tags drive releases: `v*` deploys the backend and updates the MCP Registry entry, and `ext-v*` publishes the VS Code extension.
+
+## Configuration
+
+All settings are environment variables; [`.env.example`](.env.example) lists and explains each one. The web and worker processes refuse to start if a required value is missing.
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `DATABASE_URL` | Yes | Postgres connection string |
+| `PUBLIC_URL` | Yes | Public base URL (webhooks, sign-in callback, email links) |
+| `SESSION_SECRET` | Yes | 32+ random characters; signs sessions and email links |
+| `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET` | Yes | From the GitHub App |
+| `ANTHROPIC_API_KEY` | Unless `CLAUDE_ENABLED=false` | Claude API key |
+| `RESEND_API_KEY`, `FROM_EMAIL` | Yes | Email delivery (verify your sending domain in Resend) |
+| `ANTHROPIC_MODEL` | No | Default `claude-haiku-4-5` |
+| `DIGEST_MONTHLY_CAP` | No | Claude-written digests per installation per month, default 100 |
+| `CLAUDE_ENABLED` | No | `false` sends plain digests for everyone |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | No | Pull request context in summaries |
+| `INTEGRATIONS_KEY` | No | Encrypts ticket-tracker tokens; enables tracker connections |
+
+## API
+
+The JSON API is described in [`spec/openapi.yaml`](spec/openapi.yaml) and validated at runtime. It uses the session cookie from **Sign in with GitHub**.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/me` | You and the installations you can manage |
+| `GET` | `/api/installations/{id}/mappings` | Client mappings with status (`pending`, `active`, `unsubscribed`) |
+| `PUT` | `/api/installations/{id}/mappings/{owner}/{repo}` | Create or update a mapping; sends the confirmation email |
+| `DELETE` | `/api/installations/{id}/mappings/{owner}/{repo}` | Stop digests for a repository |
+| `POST` | `/api/installations/{id}/mappings/{owner}/{repo}/test` | Send a sample digest to a confirmed client |
+| `GET` | `/api/installations/{id}/digests` | Digest history |
+| `GET` | `/api/installations/{id}/usage` | This month's usage against the cap |
+
+Other routes: `POST /webhook/github` (GitHub App deliveries), `/mcp` (remote MCP), `/oauth/*` and `/.well-known/*` (OAuth for MCP clients), `/dashboard`, `/auth/login`, `/auth/callback`, `POST /auth/logout`, `/install`, `/confirm`, `/unsubscribe`, `/privacy`, `/health`, `/ready`.
+
+## MCP server
+
+Remote: add `https://relay-vishnu.fly.dev/mcp` to your MCP client (or `https://<host>/mcp` for your own deployment). For example:
 
 ```bash
-# Development (auto-restart on changes)
-npm run dev
-
-# Production
-npm start
+claude mcp add --transport http relay https://relay-vishnu.fly.dev/mcp
 ```
 
-The server will be available at `http://localhost:3000`.
-
-## 🔧 Configuration
-
-### Backend Setup
-
-#### 1. Expose Your Backend (Development)
-
-For local testing, expose your server using a tunnel service:
+Local, against your own database:
 
 ```bash
-# Using ngrok
-ngrok http 3000
-
-# Using localtunnel
-npx localtunnel --port 3000
+RELAY_INSTALLATION_ID=12345678 npm run mcp   # stdio server for one installation
+npm run mcp:inspect                          # open it in the MCP Inspector
 ```
 
-Copy the public URL (e.g., `https://abc123.ngrok.io`).
+Client setup is in [`docs/mcp.md`](docs/mcp.md), and the tool contract is in [`spec/mcp-tools.md`](spec/mcp-tools.md).
 
-#### 2. Register GitHub Webhook
+## Testing
 
-You can register the webhook either via:
-- **VS Code Extension** (recommended) - see below
-- **Manually** via GitHub UI (Settings → Webhooks → Add webhook)
-  - Payload URL: `https://your-url.com/webhook/github`
-  - Content type: `application/json`
-  - Secret: Your `GITHUB_WEBHOOK_SECRET`
-  - Events: Just the `push` event
-
-#### 3. Map Repository to Client
-
-Use the `/config` endpoint:
-
-```bash
-curl -X POST http://localhost:3000/config \
-  -H "Content-Type: application/json" \
-  -H "X-Config-Key: your-CONFIG_API_KEY" \
-  -d '{
-    "repo": "owner/repo-name",
-    "clientEmail": "client@example.com",
-    "clientName": "Client Name"
-  }'
-```
-
-### VS Code Extension Setup (In Development)
-
-> **Note**: The extension is currently tested via the Extension Development Host and not yet packaged as a `.vsix` file.
-
-#### Running the Extension
-
-1. **Open the extension folder in VS Code:**
-   ```bash
-   cd extension
-   code .
-   ```
-
-2. **Install extension dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Compile TypeScript:**
-   ```bash
-   npm run compile
-   # Or watch mode:
-   npm run watch
-   ```
-
-4. **Launch Extension Development Host:**
-   - Press `F5` in VS Code
-   - Or: Run → Start Debugging
-   - This opens a new VS Code window with the extension loaded
-
-#### Using the Extension
-
-Once running in the Extension Development Host:
-
-1. **Set Backend URL:**
-   - Open VS Code Settings (Ctrl+, or Cmd+,)
-   - Search for "Relay"
-   - Set `relay.backendUrl` to your backend URL (e.g., `https://abc123.ngrok.io`)
-
-2. **Register GitHub Webhook:**
-   - Open Command Palette (Ctrl+Shift+P / Cmd+Shift+P)
-   - Run: `Relay: Register GitHub Webhook`
-   - Enter your GitHub Personal Access Token (stored securely in VS Code's SecretStorage)
-   - Enter your `GITHUB_WEBHOOK_SECRET`
-
-3. **Map Repository to Client:**
-   - Open Command Palette
-   - Run: `Relay: Map This Repo to a Client`
-   - Enter your `CONFIG_API_KEY`
-   - Enter client email and name
-
-4. **Send Test Email:**
-   - Open Command Palette
-   - Run: `Relay: Send Test Digest`
-   - Verifies the complete pipeline
-
-## 📡 API Endpoints
-
-### `GET /health`
-Health check endpoint.
-
-**Response:**
-```json
-{ "status": "ok" }
-```
-
-### `POST /webhook/github`
-Receives GitHub push webhooks.
-
-**Headers:**
-- `X-Hub-Signature-256`: HMAC signature
-- `X-GitHub-Event`: Event type (must be `push`)
-- `X-GitHub-Delivery`: UUID for idempotency
-
-**Response:**
-```json
-{ "status": "processed" | "duplicate" | "filtered" }
-```
-
-### `POST /config`
-Map a repository to a client.
-
-**Headers:**
-- `X-Config-Key`: Your `CONFIG_API_KEY`
-
-**Body:**
-```json
-{
-  "repo": "owner/repo-name",
-  "clientEmail": "client@example.com",
-  "clientName": "Client Name"
-}
-```
-
-### `POST /test`
-Send a test email for a repository.
-
-**Headers:**
-- `X-Config-Key`: Your `CONFIG_API_KEY`
-
-**Body:**
-```json
-{
-  "repo": "owner/repo-name"
-}
-```
-
-## 🧪 Testing
-
-### Run Test Suite
+Tests run against a real Postgres: each test file gets its own schema, so suites run in parallel. `docker compose up -d db` creates the `relay_test` database.
 
 ```bash
 npm test
+npm run lint
+npx @stoplight/spectral-cli lint spec/openapi.yaml --ruleset .spectral.yaml
 ```
 
-**Test Coverage:**
-- **Contract tests**: Validates OpenAPI spec compliance
-- **Security tests**: HMAC verification, timing-safe comparisons
-- **Claude integration**: Schema validation, retry logic
-- **Unit tests**: Database operations, email rendering
+CI runs the same steps on Node 22 and 24 with a Postgres service container, and fails if coverage drops (`npm run test:coverage`).
 
-### Manual Testing
-
-1. **Simulate a webhook locally:**
-   ```bash
-   node simulate-webhook.js
-   ```
-
-2. **Test email delivery:**
-   ```bash
-   curl -X POST http://localhost:3000/test \
-     -H "Content-Type: application/json" \
-     -H "X-Config-Key: your-CONFIG_API_KEY" \
-     -d '{"repo": "owner/repo-name"}'
-   ```
-
-## 🐳 Docker Deployment
-
-### Build Image
-
-```bash
-docker build -t relay-extension .
-```
-
-### Run Container
-
-```bash
-docker run -d \
-  -p 3000:3000 \
-  -v $(pwd)/data:/app/data \
-  -e GITHUB_WEBHOOK_SECRET=your-secret \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e RESEND_API_KEY=re_... \
-  -e FROM_EMAIL=noreply@yourdomain.com \
-  -e CONFIG_API_KEY=your-config-key \
-  -e ONLY_BRANCH=main \
-  --name relay-backend \
-  relay-extension
-```
-
-### Docker Compose (Recommended)
-
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-services:
-  relay:
-    build: .
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/app/data
-    env_file:
-      - .env
-    restart: unless-stopped
-```
-
-Run:
-```bash
-docker-compose up -d
-```
-
-## 🔒 Security Considerations
-
-- ✅ **HMAC Signature Verification**: All webhooks are cryptographically verified
-- ✅ **Timing-Safe Comparisons**: Prevents timing attacks on secrets
-- ✅ **Rate Limiting**: `/config` and `/test` endpoints are rate-limited
-- ✅ **Helmet.js**: Security headers (CSP, HSTS, etc.)
-- ✅ **Input Validation**: OpenAPI validator enforces request schemas
-- ✅ **HTML Escaping**: All user-generated content is escaped in emails
-- ✅ **Secret Storage**: VS Code extension uses encrypted SecretStorage
-- ✅ **No Logs of Secrets**: API keys never appear in logs
-
-**Important**: Never commit your `.env` file or expose API keys in version control.
-
-## 📁 Project Structure
+## Project structure
 
 ```
 relay-extension/
-├── server.js              # Main Express server
+├── server.js                 # Web process: webhooks, sign-in, API, email link pages
+├── worker.js                 # Worker process: sends digests from the queue
 ├── lib/
-│   ├── claude.js          # Claude API integration + schema validation
-│   ├── db.js              # SQLite database operations
-│   ├── email.js           # Email rendering & Resend integration
-│   ├── retry.js           # Exponential backoff retry logic
-│   └── security.js        # HMAC verification & auth middleware
-├── extension/
-│   ├── src/
-│   │   └── extension.ts   # VS Code extension commands
-│   └── package.json       # Extension manifest
-├── spec/
-│   ├── openapi.yaml       # API contract (enforced at runtime)
-│   ├── summary.schema.json # Claude output schema
-│   └── webhook-contract.md # GitHub webhook specification
-├── tests/
-│   ├── claude.test.js
-│   ├── contract.test.js
-│   └── security.test.js
-├── data/                  # SQLite database (auto-created)
-├── docs/
-│   ├── sequence.md        # Mermaid sequence diagram
-│   └── adr/
-│       └── 001-webhook-vs-git-hook.md
-├── Dockerfile
-└── package.json
+│   ├── config.js             # Env validation
+│   ├── db/                   # Postgres pool, migrations runner, tenant-scoped queries
+│   ├── jobs/process-push.js  # One delivery: caps, Claude or fallback, email, records
+│   ├── queue.js              # pg-boss setup
+│   ├── service.js            # Per-installation operations shared by API and MCP
+│   ├── pipeline.js           # Summarize + email
+│   ├── claude.js             # Claude structured outputs + schema validation
+│   ├── email.js              # Email HTML, unsubscribe headers, Resend
+│   ├── links.js              # Signed confirm/unsubscribe links
+│   ├── github.js             # GitHub OAuth (Sign in with GitHub)
+│   ├── oauth/                # MCP authorization server: clients, tokens, JWT
+│   ├── context/              # Optional PR and ticket context for summaries
+│   ├── github-app.js         # GitHub App JWT and installation tokens
+│   ├── crypto-box.js         # AES-256-GCM for stored tracker tokens
+│   ├── html.js, csrf.js      # Server-rendered pages and form protection
+│   ├── security.js           # Webhook HMAC verification
+│   └── retry.js              # Retry with backoff for Claude and Resend
+├── routes/                   # webhook, mcp, oauth, auth, dashboard, api, email links
+├── migrations/               # Numbered SQL migrations
+├── mcp/                      # MCP server, tools, resources, stdio entrypoint
+├── spec/                     # OpenAPI, JSON Schemas, webhook and MCP contracts
+├── tests/                    # Jest suites + helpers (per-file Postgres schema)
+├── extension/                # VS Code extension: registers the remote MCP server
+├── server.json               # MCP Registry entry
+├── fly.toml                  # Fly.io deployment (web + worker, migrations on release)
+├── docs/                     # GitHub App, MCP, summaries, deployment, ADRs, sequence diagram
+├── docker-compose.yml
+└── Dockerfile
 ```
 
-## 🛠️ Development
+## Security
 
-### Linting
+- Webhooks are verified with HMAC-SHA256 (constant-time) before anything else reads the body.
+- Delivery IDs are claimed atomically, so duplicates and redeliveries never send twice.
+- Sessions are signed `httpOnly` cookies with `SameSite=Lax`. The JSON API only accepts JSON bodies, which blocks cross-site form posts.
+- Tenant data is always queried by installation, and other tenants' installations return 404.
+- Email links are HMAC-signed and bound to the current address. Changing a client's email invalidates old links.
+- Everything rendered into email or pages is HTML-escaped. Commit text is passed to Claude as untrusted data, and replies are schema-validated.
+- No GitHub tokens are stored.
+- MCP access tokens are bound to `PUBLIC_URL/mcp` (RFC 8707). PKCE is mandatory, authorization codes are single-use, refresh tokens rotate, and both are stored only as hashes. The `/mcp` endpoint checks the Host header against DNS rebinding.
 
-```bash
-npm run lint
-```
+## License
 
-### Watch Mode
-
-```bash
-npm run dev  # Backend auto-restarts on changes
-
-# Extension (in extension/ folder)
-npm run watch  # TypeScript recompiles on changes
-```
-
-### Adding a New Feature
-
-1. Update `spec/openapi.yaml` for new endpoints
-2. Implement in `server.js` or modular `lib/` files
-3. Add tests in `tests/`
-4. Update this README
-
-## 📦 Future Work: Packaging the Extension
-
-Once you're ready to distribute the VS Code extension:
-
-### 1. Install vsce
-
-```bash
-npm install -g @vscode/vsce
-```
-
-### 2. Update Extension Metadata
-
-In `extension/package.json`:
-- Set `publisher` to your VS Code Marketplace publisher ID
-- Update `version`, `description`, `repository`, etc.
-- Add an `icon.png` (128x128) to the extension folder
-
-### 3. Package Extension
-
-```bash
-cd extension
-vsce package
-```
-
-This creates a `.vsix` file (e.g., `relay-setup-0.1.0.vsix`).
-
-### 4. Install Locally
-
-```bash
-code --install-extension relay-setup-0.1.0.vsix
-```
-
-### 5. Publish to Marketplace (Optional)
-
-```bash
-vsce publish
-```
-
-Or manually upload the `.vsix` to the [VS Code Marketplace](https://marketplace.visualstudio.com/manage).
-
-## 📚 Documentation
-
-- [OpenAPI Specification](spec/openapi.yaml)
-- [Webhook Contract](spec/webhook-contract.md)
-- [Architecture Decision Records](docs/adr/)
-- [Sequence Diagram](docs/sequence.md)
-
-## 🙏 Acknowledgments
-
-- [Anthropic Claude](https://www.anthropic.com/) for AI-powered summaries
-- [Resend](https://resend.com/) for reliable email delivery
-- [Express OpenAPI Validator](https://github.com/cdimascio/express-openapi-validator) for runtime contract enforcement
-
----
-
-**Built with ❤️ for keeping clients in the loop without the technical overhead.**
+MIT

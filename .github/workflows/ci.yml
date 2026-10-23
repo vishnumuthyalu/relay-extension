@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-
+  # Lets deploy.yml run these checks before a release.
+  workflow_call:
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -41,5 +42,5 @@ jobs:
           node -e "const Ajv2020=require('ajv/dist/2020');const a=new Ajv2020({strict:true});require('ajv-formats')(a);a.compile(require('./spec/summary.schema.json'));a.compile(require('./spec/push-event.schema.json'))"
       - name: Lint code
         run: npm run lint
-      - name: Test
-        run: npm test
+      - name: Test (with coverage threshold)
+        run: npm run test:coverage

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Relay API
-  version: 0.5.0
+  version: 1.0.0
   description: >
     Relay is a GitHub App that turns code pushes into plain-English email
     digests for a non-technical client. This contract is enforced at
@@ -9,7 +9,8 @@ info:
     payloads are validated against spec/push-event.schema.json inside the
     webhook route. Not part of this contract: sign-in (/auth/*), the
     dashboard (/dashboard), the email link pages (/confirm, /unsubscribe),
-    the MCP endpoint (/mcp, see spec/mcp-tools.md) and its OAuth server
+    the privacy page (/privacy), the MCP endpoint (/mcp, see
+    spec/mcp-tools.md) and its OAuth server
     (/oauth/*, /.well-known/*, see docs/adr/005-separate-authorization-server.md).
   contact:
     name: Relay maintainer
@@ -45,6 +46,28 @@ paths:
                 required: [status]
                 properties:
                   status: { type: string, const: ok }
+
+  /ready:
+    get:
+      operationId: getReady
+      tags: [ops]
+      summary: Readiness probe
+      description: Returns 200 when the process can reach Postgres, 503 otherwise. The host routes traffic only to ready instances.
+      responses:
+        '200':
+          description: Ready to serve
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ready }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /webhook/github:
     post:
