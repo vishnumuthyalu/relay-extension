@@ -9,7 +9,7 @@
 ## Setup
 
 1. Install the Relay GitHub App on your repositories: run **Relay: Install GitHub App**.
-2. Set **relay.backendUrl** in Settings to your Relay server, e.g. `https://relay.example.com`.
+2. The extension connects to the hosted Relay (`https://relay-vishnu.fly.dev`) by default. If you run your own Relay server, set **relay.backendUrl** in Settings to its URL.
 3. Open Copilot Chat in agent mode. Relay's tools appear in the tools list. The first time one runs, VS Code opens your browser so you can sign in with GitHub and approve access.
 
 The extension registers Relay's MCP server (`<backendUrl>/mcp`) with VS Code. It stores no tokens: VS Code handles the OAuth sign-in.
