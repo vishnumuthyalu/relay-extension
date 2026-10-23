@@ -53,8 +53,8 @@
       "properties": {
         "relay.backendUrl": {
           "type": "string",
-          "default": "",
-          "markdownDescription": "Base URL of your Relay server, e.g. `https://relay.example.com`. Relay's MCP server is registered at `<backendUrl>/mcp`."
+          "default": "https://relay-vishnu.fly.dev",
+          "markdownDescription": "Base URL of your Relay server. Defaults to the hosted Relay; change it only if you run your own. Relay's MCP server is registered at `<backendUrl>/mcp`."
         }
       }
     }
