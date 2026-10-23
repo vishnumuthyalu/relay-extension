@@ -50,7 +50,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@modelcontextprotocol/client": "^2.3.1",
-    "eslint": "^10.9.1",
+    "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "jest": "^30.5.0",
     "js-yaml": "^5.4.3",
