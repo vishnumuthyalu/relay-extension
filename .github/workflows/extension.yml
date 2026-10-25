@@ -24,7 +24,7 @@ jobs:
       - run: npm ci
       - run: npx tsc -p ./ --noEmit
       - run: npx vsce package --no-dependencies -o relay.vsix
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: relay-vsix
           path: extension/relay.vsix
