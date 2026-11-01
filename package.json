@@ -31,7 +31,7 @@
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.2",
     "@modelcontextprotocol/node": "^2.1.1",
-    "@modelcontextprotocol/server": "^2.3.1",
+    "@modelcontextprotocol/server": "^2.4.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "cookie-session": "^2.1.1",
